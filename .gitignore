@@ -115,3 +115,6 @@ cython_debug/
 # OS
 .DS_Store
 Thumbs.db
+
+# Training artifacts
+runs/

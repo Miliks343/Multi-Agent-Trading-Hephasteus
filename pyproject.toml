@@ -12,8 +12,10 @@ dependencies = [
     "pandas",
     "matplotlib",
     "pettingzoo",
+    "mpe2",
     "stable-baselines3",
     "supersuit",
+    "tensorboard",
 ]
 
 [tool.setuptools.packages.find]
