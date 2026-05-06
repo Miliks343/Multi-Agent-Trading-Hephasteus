@@ -79,6 +79,8 @@ class MarlLobEnv(ParallelEnv):
         start_time: str = "09:30:00",
         end_time: str = "10:30:00",
         wakeup_interval: str = "1s",
+        inventory_penalty: float = 1e-4,
+        termination_penalty: float = -1.0,
         config_kwargs: Optional[dict[str, Any]] = None,
     ) -> None:
         self.n_agents = n_agents
@@ -93,6 +95,8 @@ class MarlLobEnv(ParallelEnv):
         self.start_time = start_time
         self.end_time = end_time
         self.wakeup_interval = wakeup_interval
+        self.inventory_penalty = float(inventory_penalty)
+        self.termination_penalty = float(termination_penalty)
         self.config_kwargs = dict(config_kwargs or {})
 
         self.possible_agents = [f"mm_{i}" for i in range(n_agents)]
@@ -116,6 +120,11 @@ class MarlLobEnv(ParallelEnv):
         self._children: list[MarlChild] = []
         self._mkt_open_ns: int = 0
         self._mkt_close_ns: int = 0
+        # Per-agent equity from the previous step, for ΔPnL reward.
+        # Indexed by possible_agents[i] (we keep all N entries even after
+        # an agent terminates; lookups for terminated agents stop happening).
+        self._prev_equity: dict[str, int] = {}
+        self._terminated: dict[str, bool] = {}
 
     # ── PettingZoo space accessors ──────────────────────────────────────────
     def observation_space(self, agent: str) -> spaces.Box:
@@ -206,7 +215,15 @@ class MarlLobEnv(ParallelEnv):
         raw = self.kernel.runner()  # runs until coordinator's first non-None wakeup
 
         self.agents = list(self.possible_agents)
-        return self._unpack(raw)
+        self._terminated = {a: False for a in self.possible_agents}
+        obs, infos = self._unpack(raw)
+        # Seed prev_equity from the first per-agent snapshot so the first
+        # step's ΔPnL is computed against a real baseline rather than zero.
+        self._prev_equity = {
+            a: self._equity_from_traj_row(infos[a]["traj_row"])
+            for a in self.possible_agents
+        }
+        return obs, infos
 
     def step(
         self, actions: dict[str, np.ndarray]
@@ -217,24 +234,58 @@ class MarlLobEnv(ParallelEnv):
         dict[str, bool],
         dict[str, dict],
     ]:
-        action_list = [
-            {
-                "agent_idx": i,
-                "action_vec": tuple(float(x) for x in actions[f"mm_{i}"]),
-            }
-            for i in range(self.n_agents)
-        ]
+        # Pass actions only for agents that haven't been terminated. For a
+        # terminated agent, send a no-op (size 0) so the coordinator still
+        # has a slot per child but no orders go in.
+        action_list = []
+        for i, agent in enumerate(self.possible_agents):
+            if self._terminated[agent]:
+                vec = (0.0, 0.0, 0.0, 0.0)
+            else:
+                vec = tuple(float(x) for x in actions[agent])
+            action_list.append({"agent_idx": i, "action_vec": vec})
+
         raw = self.kernel.runner((self._coord, action_list))
         obs, infos = self._unpack(raw)
 
         truncated = bool(raw.get("done", False))
-        rewards = {a: 0.0 for a in self.agents}            # stub — chunk 4
-        terms = {a: False for a in self.agents}            # stub — chunk 4
-        truncs = {a: truncated for a in self.agents}
+        rewards: dict[str, float] = {}
+        terms: dict[str, bool] = {}
+        truncs: dict[str, bool] = {}
+        newly_terminated: list[str] = []
 
+        for agent in list(self.agents):
+            row = infos[agent]["traj_row"]
+            inv = int(row[1])
+            equity = self._equity_from_traj_row(row)
+            term_now = abs(inv) > self.max_inventory
+
+            reward = self._compute_reward(
+                prev_equity=self._prev_equity[agent],
+                equity=equity,
+                inventory=inv,
+                inventory_penalty=self.inventory_penalty,
+                terminated=term_now,
+                termination_penalty=self.termination_penalty,
+            )
+            self._prev_equity[agent] = equity
+
+            if term_now:
+                self._terminated[agent] = True
+                newly_terminated.append(agent)
+
+            rewards[agent] = reward
+            terms[agent] = term_now
+            truncs[agent] = truncated
+
+        # Drop terminated/truncated agents from the active set so PettingZoo
+        # stops sending us actions for them.
         if truncated:
-            # PettingZoo: empty self.agents signals end-of-episode
             self.agents = []
+        else:
+            for a in newly_terminated:
+                if a in self.agents:
+                    self.agents.remove(a)
 
         return obs, rewards, terms, truncs, infos
 
@@ -245,6 +296,32 @@ class MarlLobEnv(ParallelEnv):
         self.agents = []
 
     # ── Internals ───────────────────────────────────────────────────────────
+    @staticmethod
+    def _equity_from_traj_row(row: tuple) -> int:
+        """Mark-to-mid equity = cash + inventory * mid_cents (integer cents)."""
+        _ts, inv, cash, mid, _fq, _fp = row
+        return int(cash) + int(inv) * int(mid)
+
+    @staticmethod
+    def _compute_reward(
+        prev_equity: int,
+        equity: int,
+        inventory: int,
+        inventory_penalty: float,
+        terminated: bool,
+        termination_penalty: float,
+    ) -> float:
+        """ΔPnL minus inventory penalty, plus termination penalty if terminated.
+
+        ΔPnL is mark-to-mid: equity − prev_equity (cents). Inventory penalty
+        is symmetric in sign: λ·|inv| applies to long and short positions
+        identically.
+        """
+        reward = float(equity - prev_equity) - inventory_penalty * abs(inventory)
+        if terminated:
+            reward += termination_penalty
+        return reward
+
     def _unpack(
         self, raw: dict
     ) -> tuple[dict[str, np.ndarray], dict[str, dict]]:
