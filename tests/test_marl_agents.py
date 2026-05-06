@@ -60,9 +60,12 @@ def test_distribute_actions_rejects_unknown_index():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _fake_order(is_buy: bool, price: int, qty: int):
+    """Mock that matches real ABIDES Order: `.side.is_bid()`, `.fill_price`, `.quantity`."""
+    side = MagicMock()
+    side.is_bid.return_value = is_buy
     o = MagicMock()
-    o.is_buy_order = is_buy
-    o.fill_price = price       # ABIDES sets this on executed orders
+    o.side = side
+    o.fill_price = price
     o.quantity = qty
     return o
 

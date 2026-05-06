@@ -73,7 +73,7 @@ def snapshot_fills(executed_orders: list[Any]) -> list[ExecutedFill]:
     """
     out: list[ExecutedFill] = []
     for order in executed_orders:
-        sign = 1 if order.is_buy_order else -1
+        sign = 1 if order.side.is_bid() else -1
         out.append(
             ExecutedFill(
                 signed_qty=sign * int(order.quantity),
@@ -165,6 +165,7 @@ try:  # pragma: no cover — environment-dependent
     from abides_markets.agents.background_v2.core_background_agent import (
         CoreBackgroundAgent,
     )
+    from abides_markets.orders import Side  # for the bool→Side adapter below
     _ABIDES_AVAILABLE = True
 except Exception:  # pragma: no cover
     CoreBackgroundAgent = object  # type: ignore[misc, assignment]
@@ -209,10 +210,16 @@ class MarlChild(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
         self.pending_action: Optional[tuple[float, float, float, float]] = None
 
     def act_on_wakeup(self) -> None:  # pragma: no cover — ABIDES-driven
+        # Schedule the next wakeup unconditionally — even if we have no
+        # pending action, we need to keep ticking so the coordinator's
+        # apply_actions has somewhere to land.
+        self.set_wakeup(
+            self.current_time + self.wakeup_interval_generator.next()
+        )
         if self.pending_action is None:
             return
-        bids = self.known_bids.get(self.symbol, [])
-        asks = self.known_asks.get(self.symbol, [])
+        bids = self.parsed_mkt_data.get("bids", []) or []
+        asks = self.parsed_mkt_data.get("asks", []) or []
         if bids and asks:
             mid = (bids[0][0] + asks[0][0]) // 2
         elif bids:
@@ -231,10 +238,17 @@ class MarlChild(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
             max_size=self.max_size,
             tick_size=self.tick_size,
         )
+        # ABIDES' place_limit_order expects a Side enum, not a bool. Adapt
+        # here so dispatch_intents stays ABIDES-free for Neil's unit tests.
+        def _place(symbol, qty, is_buy, limit_price):
+            self.place_limit_order(
+                symbol, qty, Side.BID if is_buy else Side.ASK, limit_price
+            )
+
         dispatch_intents(
             intents,
             orders_dict=self.orders,
-            place_fn=self.place_limit_order,
+            place_fn=_place,
             cancel_fn=self.cancel_order,
         )
         self.pending_action = None
@@ -285,6 +299,11 @@ class MarlCoordinator(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
         distribute_actions(actions, self.children)
 
     def act_on_wakeup(self) -> dict[str, Any]:  # pragma: no cover — ABIDES-driven
+        # Schedule next wakeup; without this, the agent fires once and the
+        # episode effectively ends.
+        self.set_wakeup(
+            self.current_time + self.wakeup_interval_generator.next()
+        )
         snaps = [
             ChildSnapshot(
                 inventory=int(child.get_holdings(child.symbol)),
@@ -299,8 +318,8 @@ class MarlCoordinator(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
         return {
             "per_agent": build_per_agent_state(
                 snaps,
-                known_bids=self.known_bids.get(self.symbol, []),
-                known_asks=self.known_asks.get(self.symbol, []),
+                known_bids=self.parsed_mkt_data.get("bids", []) or [],
+                known_asks=self.parsed_mkt_data.get("asks", []) or [],
                 current_time_ns=int(self.current_time),
                 mkt_open_ns=self.mkt_open_ns,
                 mkt_close_ns=self.mkt_close_ns,

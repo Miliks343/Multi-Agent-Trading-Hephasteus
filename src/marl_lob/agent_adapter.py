@@ -34,7 +34,7 @@ def project_resting_orders(orders_dict: dict) -> list[RestingOrder]:
         out.append(
             RestingOrder(
                 order_id=int(order_id),
-                is_buy_order=bool(order.is_buy_order),
+                is_buy_order=bool(order.side.is_bid()),
                 limit_price=int(order.limit_price),
                 quantity=int(order.quantity),
             )
