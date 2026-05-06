@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from marl_lob.marl_coordinator import (
+from marl_lob.marl_agents import (
     ChildSnapshot,
     ExecutedFill,
     build_per_agent_state,
