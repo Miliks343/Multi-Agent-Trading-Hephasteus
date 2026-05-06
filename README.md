@@ -55,6 +55,27 @@ if execution_agents and POVExecutionAgent is not None:
 
 We don't use execution agents, so this is purely a "make the import work" patch.
 
+#### `str_to_ns` unit fix (modern pandas)
+
+`abides-jpmc-public/abides-core/abides_core/utils.py` has a `str_to_ns` that
+returns the wrong unit on pandas ≥ 2.x. Symptom: `str_to_ns("1s")` returns
+`1_000_000` (microseconds) instead of `1_000_000_000` (nanoseconds), so every
+RMSC03 wakeup interval and market-window timestamp is off by 1000×.
+
+Replace the body of `str_to_ns`:
+
+```python
+def str_to_ns(string: str) -> NanosecondTime:
+    return pd.to_timedelta(string).value   # was: .to_timedelta64().astype(int)
+```
+
+`Timedelta.value` is always ns regardless of pandas version. `datetime_str_to_ns`
+already uses `.value` and does not need patching.
+
+**Why this matters:** without the fix, sims labelled "1 hour" actually run
+3.6 sim-seconds. Output looks plausible (relative timing is preserved) but
+agents have ~1000× less data per episode than expected.
+
 ### Skipped ABIDES deps
 
 - `gym==0.18.0` — old setup metadata won't build on modern setuptools. Only used in `abides-gym` (which we don't need; we use PettingZoo + SB3).

@@ -5,11 +5,12 @@ integer cents to avoid float drift across long episodes. Convert to dollars
 only at presentation time.
 
 A trajectory row corresponds to one wrapper step:
-    (timestamp, inventory, cash, mid_price, fill)
+    (timestamp, inventory, cash, mid_price, fill_qty, fill_price)
 
-where `fill` is a signed integer trade quantity for that step (+N for buy,
--N for sell, 0 for no fill). The wrapper (Module C) is the producer; this
-module is the consumer.
+where `fill_qty` is a signed integer trade quantity for that step (+N for
+buy, -N for sell, 0 for no fill) and `fill_price` is the cents-VWAP of all
+fills that landed during the step (or 0 if no fill). The wrapper (Module C)
+is the producer; this module is the consumer.
 """
 from __future__ import annotations
 
@@ -59,10 +60,12 @@ class Trajectory:
 
     @classmethod
     def from_tuples(cls, rows: list[tuple]) -> Trajectory:
-        """Build a Trajectory from `(timestamp, inventory, cash, mid_price, fill)` rows.
+        """Build a Trajectory from 6-tuple rows
+        ``(timestamp, inventory, cash, mid_price, fill_qty, fill_price)``.
 
-        `fill` is a signed integer trade quantity for that step. Non-zero fills
-        are also recorded in the `fills` list.
+        Non-zero ``fill_qty`` rows are also recorded in the ``fills`` list,
+        with ``Fill.price`` taken from the row's ``fill_price`` (the actual
+        VWAP of fills, not the mid).
         """
         if not rows:
             return cls(
@@ -78,14 +81,14 @@ class Trajectory:
         mid_price = np.array([r[3] for r in rows], dtype=np.int64)
 
         fills: list[Fill] = []
-        for ts, _inv, _c, mid, fill in rows:
-            if fill:
+        for ts, _inv, _c, _mid, fill_qty, fill_price in rows:
+            if fill_qty:
                 fills.append(
                     Fill(
                         timestamp=float(ts),
-                        side=1 if fill > 0 else -1,
-                        price=int(mid),
-                        quantity=int(abs(fill)),
+                        side=1 if fill_qty > 0 else -1,
+                        price=int(fill_price),
+                        quantity=int(abs(fill_qty)),
                     )
                 )
         return cls(

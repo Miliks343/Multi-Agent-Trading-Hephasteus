@@ -20,7 +20,7 @@ from marl_lob.agent_adapter import (
 
 def test_project_resting_orders_extracts_fields():
     fake_order = MagicMock()
-    fake_order.is_buy_order = True
+    fake_order.side.is_bid.return_value = True
     fake_order.limit_price = 9_998
     fake_order.quantity = 5
     out = project_resting_orders({42: fake_order})

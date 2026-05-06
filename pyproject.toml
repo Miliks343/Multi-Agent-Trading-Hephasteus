@@ -14,6 +14,7 @@ dependencies = [
     "pettingzoo",
     "stable-baselines3",
     "supersuit",
+    "tensorboard",
 ]
 
 [project.optional-dependencies]
