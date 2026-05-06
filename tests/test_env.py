@@ -1,11 +1,18 @@
-"""Pure-helper tests for MarlLobEnv reward + equity arithmetic.
+"""Tests for MarlLobEnv.
 
-Full kernel-driven integration tests live in chunk 6 alongside the
-PettingZoo conformance check. These tests pin the formulas in isolation
-so a sign error or off-by-one in the reward function fails fast,
-without spinning up ABIDES.
+Two layers:
+
+- Pure-helper tests (always fast): equity arithmetic + reward formula.
+  Pin the formulas in isolation so a sign error fails fast without
+  spinning up the kernel.
+- Integration tests (marked `abides`): drive a real ABIDES kernel
+  through reset/step and check shapes, dtypes, fill production,
+  termination handling, and PettingZoo API conformance.
 """
 from __future__ import annotations
+
+import numpy as np
+import pytest
 
 from marl_lob.env import MarlLobEnv
 
@@ -91,3 +98,88 @@ def test_reward_termination_with_pnl_and_penalty():
     )
     # -500 - 0.2 - 5.0 = -505.2
     assert r == -505.2
+
+
+# ── Integration: real ABIDES kernel under the env ───────────────────────────
+# These spin up RMSC03 + coordinator + children for real. ~1-3s each.
+
+@pytest.fixture
+def env():
+    e = MarlLobEnv(n_agents=2)
+    yield e
+    e.close()
+
+
+@pytest.mark.abides
+def test_reset_returns_correct_obs_shapes_and_info_keys(env):
+    obs, info = env.reset(seed=42)
+    assert set(obs.keys()) == {"mm_0", "mm_1"}
+    for v in obs.values():
+        assert v.shape == (44,)
+        assert v.dtype == np.float32
+    for v in info.values():
+        assert "traj_row" in v
+        assert len(v["traj_row"]) == 6
+
+
+@pytest.mark.abides
+def test_traj_row_dtypes_match_trajectory_contract(env):
+    obs, info = env.reset(seed=42)
+    acts = {a: np.array([2.0, 2.0, 5.0, 5.0], dtype=np.float32) for a in env.agents}
+    _obs, _r, _t, _tr, info = env.step(acts)
+    ts, inv, cash, mid, fill_qty, fill_price = info["mm_0"]["traj_row"]
+    assert isinstance(ts, float)
+    assert isinstance(inv, int) and isinstance(cash, int)
+    assert isinstance(mid, int) and isinstance(fill_qty, int)
+    assert isinstance(fill_price, int)
+
+
+@pytest.mark.abides
+def test_random_policy_100_steps_produces_fills(env):
+    """Smoke: 100 random steps run cleanly and at least some fills happen."""
+    rng = np.random.default_rng(0)
+    obs, info = env.reset(seed=42)
+    fills_seen = {a: 0 for a in env.possible_agents}
+    for _ in range(100):
+        acts = {
+            a: rng.uniform(env._act_space.low, env._act_space.high).astype(np.float32)
+            for a in env.agents
+        }
+        obs, rewards, terms, truncs, info = env.step(acts)
+        for a in env.possible_agents:
+            if info[a]["traj_row"][4] != 0:
+                fills_seen[a] += 1
+        if any(truncs.values()):
+            break
+    assert sum(fills_seen.values()) > 0, "no fills in 100 random-policy steps"
+
+
+@pytest.mark.abides
+def test_terminated_agent_drops_out_of_active_set():
+    """Force-spike mm_0's inventory; it should leave self.agents."""
+    e = MarlLobEnv(n_agents=2, max_inventory=20)
+    obs, info = e.reset(seed=42)
+    # Aggressive bid (offset 0, size 100) on mm_0; mm_1 stays passive.
+    aggressive = np.array([0.0, 50.0, 100.0, 0.0], dtype=np.float32)
+    passive = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    for _ in range(20):
+        if "mm_0" not in e.agents:
+            break
+        acts = {"mm_0": aggressive, "mm_1": passive}
+        # Only pass actions for still-active agents.
+        acts = {a: acts[a] for a in e.agents}
+        obs, rewards, terms, truncs, info = e.step(acts)
+        if any(truncs.values()):
+            pytest.fail("kernel truncated before mm_0 termination")
+    assert "mm_0" not in e.agents, "mm_0 never terminated despite forced spike"
+    assert "mm_1" in e.agents, "mm_1 should still be active"
+    e.close()
+
+
+@pytest.mark.abides
+def test_pettingzoo_parallel_api_conformance():
+    """PettingZoo's official API check: spaces, dtypes, dict-shape conformance."""
+    from pettingzoo.test import parallel_api_test
+    e = MarlLobEnv(n_agents=2)
+    parallel_api_test(e, num_cycles=50)
+    e.close()
