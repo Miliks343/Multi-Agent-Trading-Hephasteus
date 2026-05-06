@@ -101,6 +101,7 @@ class MarlLobEnv(ParallelEnv):
 
         self.possible_agents = [f"mm_{i}" for i in range(n_agents)]
         self.agents: list[str] = []
+        self.render_mode = None  # required by SuperSuit's MarkovVectorEnv
 
         obs_dim = obs_vector_size(k)
         self._obs_space = spaces.Box(
