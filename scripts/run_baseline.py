@@ -92,7 +92,10 @@ def main():
             print(f"  F[{i}]: no snapshots recorded (kernel may have exited "
                   f"before mkt_open)")
             continue
-        m = compute_all(traj)
+        # Infer step duration from the trajectory itself rather than the
+        # default 1s — F's snapshot rate is its wakeup_freq (~10s).
+        dt = float(np.median(np.diff(traj.timestamps))) if len(traj) > 1 else 1.0
+        m = compute_all(traj, dt_seconds=dt)
         eq = traj.equity()
         print(f"  F[{i}]: snapshots={len(traj)} fills={len(traj.fills)}")
         print(f"    Sharpe       : {m['sharpe']:.3f}")
