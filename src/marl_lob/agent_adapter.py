@@ -20,7 +20,7 @@ from .actions import (
 )
 
 try:  # pragma: no cover — import is environment-dependent
-    from agent.TradingAgent import TradingAgent  # type: ignore
+    from abides_markets.agents.trading_agent import TradingAgent  # type: ignore
     _ABIDES_AVAILABLE = True
 except Exception:  # pragma: no cover
     TradingAgent = object  # type: ignore[misc, assignment]
