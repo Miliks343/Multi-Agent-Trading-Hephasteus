@@ -71,6 +71,7 @@ class MarlLobEnv(ParallelEnv):
         starting_cash: int = DEFAULT_STARTING_CASH,
         k: int = DEFAULT_K,
         max_size: int = 100,
+        min_size: int = 0,
         max_offset_cents: int = 50,
         tick_size: int = 1,
         max_inventory: int = DEFAULT_MAX_INVENTORY,
@@ -87,6 +88,7 @@ class MarlLobEnv(ParallelEnv):
         self.starting_cash = starting_cash
         self.k = k
         self.max_size = max_size
+        self.min_size = min_size
         self.max_offset_cents = max_offset_cents
         self.tick_size = tick_size
         self.max_inventory = max_inventory
@@ -108,7 +110,7 @@ class MarlLobEnv(ParallelEnv):
             low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32
         )
         self._act_space = spaces.Box(
-            low=np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            low=np.array([0.0, 0.0, float(min_size), float(min_size)], dtype=np.float32),
             high=np.array(
                 [max_offset_cents, max_offset_cents, max_size, max_size],
                 dtype=np.float32,

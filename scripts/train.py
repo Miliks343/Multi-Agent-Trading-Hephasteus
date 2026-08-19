@@ -17,18 +17,26 @@ from pathlib import Path
 
 import supersuit as ss
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import VecMonitor
+from stable_baselines3.common.utils import set_random_seed
+from stable_baselines3.common.vec_env import VecMonitor, VecNormalize
 
 from marl_lob.env import MarlLobEnv
 
 
-def make_env(num_vec_envs: int):
-    env = MarlLobEnv(n_agents=2, max_inventory=10_000)
+def make_env(num_vec_envs: int, *, inventory_penalty: float, vecnormalize: bool):
+    env = MarlLobEnv(
+        n_agents=2,
+        max_inventory=10_000,
+        inventory_penalty=inventory_penalty,
+    )
     env = ss.pettingzoo_env_to_vec_env_v1(env)
     env = ss.concat_vec_envs_v1(
         env, num_vec_envs=num_vec_envs, num_cpus=1, base_class="stable_baselines3"
     )
-    return VecMonitor(env)
+    env = VecMonitor(env)
+    if vecnormalize:
+        env = VecNormalize(env, norm_obs=False, norm_reward=True, clip_reward=10.0)
+    return env
 
 
 def main():
@@ -39,11 +47,24 @@ def main():
     parser.add_argument("--n-steps", type=int, default=512,
                         help="PPO rollout length per env. ABIDES is slow, so "
                              "smaller rollouts give finer-grained TB logs.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="seed for PPO + env reset")
+    parser.add_argument("--inventory-penalty", type=float, default=0.0,
+                        help="passed to MarlLobEnv (env default is 1e-4)")
+    parser.add_argument("--no-vecnormalize", action="store_true",
+                        help="disable VecNormalize wrapper")
     args = parser.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    env = make_env(args.num_vec_envs)
+    if args.seed is not None:
+        set_random_seed(args.seed)
+
+    env = make_env(
+        args.num_vec_envs,
+        inventory_penalty=args.inventory_penalty,
+        vecnormalize=not args.no_vecnormalize,
+    )
     model = PPO(
         "MlpPolicy",
         env,
