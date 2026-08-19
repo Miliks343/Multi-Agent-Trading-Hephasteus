@@ -118,3 +118,6 @@ cython_debug/
 # OS
 .DS_Store
 Thumbs.db
+
+# training + eval artifacts (checkpoints, TB logs, trajectories)
+runs/
