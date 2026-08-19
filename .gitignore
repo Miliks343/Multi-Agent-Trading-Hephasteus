@@ -121,3 +121,8 @@ Thumbs.db
 
 # training + eval artifacts (checkpoints, TB logs, trajectories)
 runs/
+
+# experiment bundle working dirs
+.work/
+results/
+experiments/jobs/
