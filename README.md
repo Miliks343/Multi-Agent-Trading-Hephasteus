@@ -26,6 +26,11 @@ pip install -e ".[dev]"
 
 ### ABIDES patch
 
+**Fast path:** apply `patches/abides-jpmc-public-local.patch` with `git apply`
+instead of making the edits below by hand. See `patches/README.md`. The manual
+instructions are kept for reference.
+
+
 Upstream `abides-jpmc-public/abides-markets/abides_markets/configs/rmsc03.py` imports
 `POVExecutionAgent` (which doesn't exist in this fork) and instantiates it
 unconditionally. Two small edits:
