@@ -6,7 +6,7 @@ lives **inside this clone** — no conda, no system packages, nothing written to
 the job.
 
 ```bash
-git clone https://github.com/Pavel12431432/marl-lob.git
+git clone https://github.com/paveljor/marl-lob.git
 cd marl-lob
 experiments/bootstrap.sh              # venv + patched ABIDES + install + verify
 experiments/run.sh smoke              # ~2 min: proves the pipeline works here
