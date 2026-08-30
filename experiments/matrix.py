@@ -18,20 +18,39 @@ from pathlib import Path
 
 SEEDS = (0, 1, 7)
 
+# Eval seeds are cheap (~30s each, no training) and a single one leaves every
+# number in the writeup resting on one sampled market. Three is the difference
+# between "the agent made $X" and "the agent made $X across three markets".
+EVAL_SEEDS = (42, 43, 44)
 
-def job(name, train_args, *, n_agents=2, eval_seeds=(42,), timesteps=50_000):
+
+def job(name, train_args, *, n_agents=2, eval_seeds=EVAL_SEEDS, timesteps=50_000):
     return {"name": name, "n_agents": n_agents, "timesteps": timesteps,
             "train_args": list(train_args), "eval_seeds": list(eval_seeds)}
 
 
 def suite_smoke():
-    return [job("smoke", [], timesteps=2_000)]
+    return [job("smoke", [], timesteps=2_000, eval_seeds=(42,))]
 
 
 def suite_cheap():
     jobs = []
-    # E1: observations are raw cents (~1e5). Same magnitude problem as the
-    # reward, never tested on the input side.
+    # E1 (restated 2026-08-30 - the original premise was wrong). Observations
+    # are NOT raw cents: extract_obs already returns prices as distance from
+    # mid, sizes over max_size, and clips the whole vector to [-1, 1]. So this
+    # is not the reward-scale bug on the input side.
+    #
+    # What it actually tests: the 44 features sit in [-1, 1] but do not move
+    # equally within it. Measured on a rollout, ask_size_L1 has std 0.33 while
+    # spread_norm has std 0.00026 - a ~1300x gap. Since first-layer weights all
+    # start at the same scale, a feature's influence tracks how much it varies,
+    # so the policy is nearly blind to the spread. --norm-obs (VecNormalize
+    # per-dim running mean/std) equalises them; the risk is that near-constant
+    # features get their jitter amplified to full scale, i.e. noise.
+    #
+    # Prediction (Pavel, before running): no material difference. Any effect
+    # will be smaller than the seed-to-seed variance already known to be large,
+    # and the honest reading at 3 seeds will be "this cannot tell us".
     for s in SEEDS:
         jobs.append(job(f"norm_obs/seed{s}", ["--norm-obs", "--seed", s]))
         jobs.append(job(f"norm_obs_off/seed{s}", ["--seed", s]))

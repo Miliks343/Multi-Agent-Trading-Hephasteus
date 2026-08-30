@@ -3,13 +3,16 @@
 
 Reads each run's run_meta.json (args + provenance + wallclock) and, where eval
 trajectories exist, computes the realised change in mark-to-market equity per
-agent. Where fills were logged it also reports the spread-capture / adverse-
-selection split - currently that is the F baseline path only, because
-MarlChild does not log fills (see notes/design_space.md, E2).
+agent plus the spread-capture / adverse-selection split from the fills.
+
+Also archives each run's raw artifacts into the results dir, because
+teardown.sh deletes runs/ and results/ is the only thing that survives being
+copied off a borrowed machine.
 """
 import argparse
 import csv
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -36,9 +39,40 @@ def markout(npz):
     return capture, adverse
 
 
+ARCHIVE_GLOBS = ("run_meta.json", "progress.csv", "vecnormalize.pkl",
+                 "ppo_marl_lob.zip", "eval/*.npz")
+
+
+def results_dir(repo: Path) -> Path:
+    """Where bootstrap.sh told us to write. Falls back to results/ locally."""
+    marker = repo / ".work" / "results_dir"
+    if marker.is_file() and marker.read_text().strip():
+        return Path(marker.read_text().strip())
+    return repo / "results"
+
+
+def archive_run(run_dir: Path, dest_root: Path) -> int:
+    """Copy one run's raw artifacts under dest_root, preserving layout.
+
+    Trajectories, checkpoints, normalisation stats and training curves all
+    live in runs/, which teardown.sh removes. Copying them here is what makes
+    the difference between "collect the numbers again" and "retrain".
+    """
+    copied = 0
+    for pattern in ARCHIVE_GLOBS:
+        for src in sorted(run_dir.glob(pattern)):
+            dest = dest_root / src.relative_to(run_dir)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+            copied += 1
+    return copied
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("suite")
+    ap.add_argument("--no-archive", action="store_true",
+                    help="skip copying raw artifacts into the results dir")
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
@@ -46,7 +80,9 @@ def main():
     if not root.exists():
         raise SystemExit(f"no runs found at {root.relative_to(repo)}")
 
+    results = results_dir(repo)
     rows = []
+    archived = 0
     for meta_path in sorted(root.rglob("run_meta.json")):
         meta = json.loads(meta_path.read_text())
         a = meta["args"]
@@ -65,14 +101,41 @@ def main():
             "host": meta.get("host"),
             "git_sha": (meta.get("git_sha") or "")[:8],
         }
+        # Filenames are <prefix>_<agent_idx>_seed<eval_seed>.npz. Keying only
+        # on agent index would let the last eval seed silently overwrite the
+        # others, so each seed gets its own column and the headline
+        # d_equity_<agent> is the mean across them.
+        per_agent: dict[str, dict[str, list[float]]] = {}
         for npz in sorted((run_dir / "eval").glob("*trajectory*.npz")):
-            tag = npz.stem.split("_")[-2]  # agent index
-            row[f"d_equity_{tag}"] = round(equity_change(npz), 0)
+            parts = npz.stem.split("_")
+            agent, eval_seed = parts[-2], parts[-1].removeprefix("seed")
+            acc = per_agent.setdefault(agent, {"d_equity": [], "capture": [], "adverse": []})
+
+            d_eq = equity_change(npz)
+            row[f"d_equity_{agent}_s{eval_seed}"] = round(d_eq, 0)
+            acc["d_equity"].append(d_eq)
+
             cap, adv = markout(npz)
             if cap is not None:
-                row[f"capture_{tag}"] = round(cap, 0)
-                row[f"adverse_{tag}"] = round(adv, 0)
+                row[f"capture_{agent}_s{eval_seed}"] = round(cap, 0)
+                row[f"adverse_{agent}_s{eval_seed}"] = round(adv, 0)
+                acc["capture"].append(cap)
+                acc["adverse"].append(adv)
+
+        for agent, acc in per_agent.items():
+            for metric, vals in acc.items():
+                if vals:
+                    row[f"{metric}_{agent}"] = round(float(np.mean(vals)), 0)
+                    if len(vals) > 1 and metric == "d_equity":
+                        # Spread across eval seeds - without it a single mean
+                        # reads as far more certain than it is.
+                        row[f"d_equity_{agent}_sd"] = round(float(np.std(vals)), 0)
         rows.append(row)
+
+        if not args.no_archive:
+            archived += archive_run(
+                run_dir, results / "artifacts" / args.suite / row["run"]
+            )
 
     if not rows:
         raise SystemExit("no run_meta.json found - did the suite finish?")
@@ -93,6 +156,10 @@ def main():
     for r in rows:
         print("  ".join(str(r.get(f, "")).ljust(widths[f]) for f in show))
     print(f"\nfull table ({len(fields)} columns) -> {out.relative_to(repo)}")
+    if archived:
+        print(f"archived {archived} raw artifacts -> "
+              f"{results / 'artifacts' / args.suite}")
+        print("these survive teardown.sh; copy results/ off the machine to keep them")
 
 
 if __name__ == "__main__":
