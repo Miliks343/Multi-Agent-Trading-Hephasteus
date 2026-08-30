@@ -12,23 +12,42 @@ from __future__ import annotations
 import argparse
 import warnings
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 from stable_baselines3 import PPO
 
 from marl_lob.env import MarlLobEnv
 from marl_lob.metrics import compute_all
-from marl_lob.trajectory import Fill, Trajectory
+from marl_lob.trajectory import Trajectory, load_trajectory, save_trajectory
 
 warnings.filterwarnings("ignore")
 
 
-def rollout_ppo(env: MarlLobEnv, model, seed: int, max_steps: int) -> dict[str, Trajectory]:
-    """Run a deterministic-policy rollout, return per-agent Trajectory."""
+class Rollout(NamedTuple):
+    """One agent's episode: the metrics trajectory plus the raw policy I/O.
+
+    `observations` has one row per snapshot (the reset row first); `actions`
+    has one row per step, so `actions[i]` is the action taken from
+    `observations[i]` that produced snapshot `i + 1`. Both are kept because
+    the interesting failures are visible only here: whether the policy is
+    frozen at initialisation, and where in the book it chose to quote.
+    """
+    traj: Trajectory
+    actions: np.ndarray
+    observations: np.ndarray
+
+
+def rollout_ppo(env: MarlLobEnv, model, seed: int, max_steps: int) -> dict[str, Rollout]:
+    """Run a deterministic-policy rollout, return per-agent Rollout."""
     obs, info = env.reset(seed=seed)
     rows: dict[str, list[tuple]] = {
         a: [info[a]["traj_row"]] for a in env.possible_agents
     }
+    obs_log: dict[str, list[np.ndarray]] = {
+        a: [np.asarray(obs[a], dtype=np.float32)] for a in env.possible_agents if a in obs
+    }
+    act_log: dict[str, list[np.ndarray]] = {a: [] for a in env.possible_agents}
     for _ in range(max_steps):
         if not env.agents:
             break
@@ -36,34 +55,31 @@ def rollout_ppo(env: MarlLobEnv, model, seed: int, max_steps: int) -> dict[str, 
             a: model.predict(obs[a], deterministic=True)[0].astype(np.float32)
             for a in env.agents
         }
+        for a, act in actions.items():
+            act_log[a].append(act)
         obs, _r, _t, trunc, info = env.step(actions)
         for a in env.possible_agents:
             if a in info:
                 rows[a].append(info[a]["traj_row"])
+            if a in obs:
+                obs_log.setdefault(a, []).append(np.asarray(obs[a], dtype=np.float32))
         if any(trunc.values()):
             break
-    return {a: Trajectory.from_tuples(r) for a, r in rows.items()}
 
+    def stack(seq: list[np.ndarray], width_from: list[np.ndarray]) -> np.ndarray:
+        if seq:
+            return np.stack(seq).astype(np.float32)
+        width = width_from[0].shape[0] if width_from else 0
+        return np.zeros((0, width), dtype=np.float32)
 
-def load_baseline_trajectory(path: Path) -> Trajectory:
-    """Reconstruct a Trajectory (incl. fills) from the .npz saved by run_baseline."""
-    d = np.load(path)
-    fills = [
-        Fill(
-            timestamp=float(d["fill_timestamps"][i]),
-            side=int(d["fill_side"][i]),
-            price=int(d["fill_price"][i]),
-            quantity=int(d["fill_quantity"][i]),
+    return {
+        a: Rollout(
+            traj=Trajectory.from_tuples(rows[a]),
+            actions=stack(act_log.get(a, []), obs_log.get(a, [])),
+            observations=stack(obs_log.get(a, []), obs_log.get(a, [])),
         )
-        for i in range(len(d["fill_timestamps"]))
-    ]
-    return Trajectory(
-        timestamps=d["timestamps"],
-        inventory=d["inventory"],
-        cash=d["cash"],
-        mid_price=d["mid_price"],
-        fills=fills,
-    )
+        for a in env.possible_agents
+    }
 
 
 def infer_dt_seconds(traj: Trajectory) -> float:
@@ -108,32 +124,35 @@ def main():
 
     for seed in args.seeds:
         env = MarlLobEnv(n_agents=args.n_agents, max_inventory=10_000)
-        ppo_trajs = rollout_ppo(env, model, seed, args.max_steps)
+        rollouts = rollout_ppo(env, model, seed, args.max_steps)
         env.close()
 
         print(f"\n== seed {seed} ==")
         for i in range(args.n_agents):
             agent = f"mm_{i}"
-            ppo = ppo_trajs[agent]
+            roll = rollouts[agent]
+            ppo = roll.traj
             print(f"  agent {agent}")
             metric_block("PPO", ppo)
 
             if not args.no_baseline:
                 f_path = args.baseline_dir / f"trajectory_{i}_seed{seed}.npz"
                 if f_path.exists():
-                    f_traj = load_baseline_trajectory(f_path)
+                    f_traj = load_trajectory(f_path)
                     metric_block("F", f_traj)
                 else:
                     print(f"    F   : no baseline at {f_path}; "
                           f"run scripts/run_baseline.py --seed {seed}")
 
-            # Save PPO trajectory for later analysis
-            np.savez(
+            # Save the full PPO rollout. Fills drive the markout
+            # decomposition, actions show where the policy chose to quote,
+            # observations show the magnitudes it was fed - none of which can
+            # be recovered without re-running the episode.
+            save_trajectory(
                 args.out_dir / f"ppo_trajectory_{i}_seed{seed}.npz",
-                timestamps=ppo.timestamps,
-                inventory=ppo.inventory,
-                cash=ppo.cash,
-                mid_price=ppo.mid_price,
+                ppo,
+                actions=roll.actions,
+                observations=roll.observations,
             )
 
     print(f"\nPPO trajectories saved → {args.out_dir}/")

@@ -27,6 +27,7 @@ from pathlib import Path
 
 import supersuit as ss
 from stable_baselines3 import PPO
+from stable_baselines3.common.logger import configure
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env import VecMonitor, VecNormalize
 
@@ -152,15 +153,24 @@ def main():
         env,
         verbose=1,
         n_steps=args.n_steps,
-        tensorboard_log=str(args.out_dir / "tb"),
         device=args.device,
     )
+    # Diagnostics go to progress.csv as well as tensorboard: value_loss,
+    # approx_kl, explained_variance and the policy std are the instruments
+    # that diagnose the reward-scale failure, and a plain CSV survives being
+    # copied off a borrowed machine and read without a tensorboard install.
+    model.set_logger(configure(str(args.out_dir), ["stdout", "csv", "tensorboard"]))
 
     started = time.time()
     model.learn(total_timesteps=args.total_timesteps, progress_bar=False)
     elapsed = time.time() - started
 
     model.save(args.out_dir / "ppo_marl_lob")
+    # The running obs/reward statistics are part of the trained model. Without
+    # them the checkpoint cannot be re-evaluated later - it would have to be
+    # retrained - so they are saved next to it.
+    if isinstance(env, VecNormalize):
+        env.save(str(args.out_dir / "vecnormalize.pkl"))
 
     # provenance: without this, results collected on different machines at
     # different times cannot be compared or reproduced

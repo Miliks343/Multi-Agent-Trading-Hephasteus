@@ -27,6 +27,7 @@ from abides_markets.utils import config_add_agents
 from marl_lob.baseline_traj import LoggingConstantSpreadMM
 from marl_lob.configs import rmsc03_simple
 from marl_lob.metrics import compute_all
+from marl_lob.trajectory import save_trajectory
 
 warnings.filterwarnings("ignore")
 
@@ -108,21 +109,10 @@ def main():
         print(f"    Final inv    : {int(traj.inventory[-1])} shares")
 
         # Save full trajectory (incl. fills) so chunk 9 can compare PPO
-        # against F under identical metrics.
-        fill_ts = np.array([f.timestamp for f in traj.fills], dtype=float)
-        fill_side = np.array([f.side for f in traj.fills], dtype=np.int64)
-        fill_price = np.array([f.price for f in traj.fills], dtype=np.int64)
-        fill_qty = np.array([f.quantity for f in traj.fills], dtype=np.int64)
-        np.savez(
-            args.out_dir / f"trajectory_{i}_seed{args.seed}.npz",
-            timestamps=traj.timestamps,
-            inventory=traj.inventory,
-            cash=traj.cash,
-            mid_price=traj.mid_price,
-            fill_timestamps=fill_ts,
-            fill_side=fill_side,
-            fill_price=fill_price,
-            fill_quantity=fill_qty,
+        # against F under identical metrics. Same writer as eval.py, so the
+        # two paths cannot drift apart.
+        save_trajectory(
+            args.out_dir / f"trajectory_{i}_seed{args.seed}.npz", traj
         )
 
     print(f"\ntrajectories saved → {args.out_dir}/")
