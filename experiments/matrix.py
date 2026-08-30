@@ -76,6 +76,14 @@ def suite_grid():
       - interaction: competition removes the cushion that lets a maker survive
         adverse selection, so withdrawal arrives at a LOWER informed fraction
         as n_agents rises
+
+    Training budget is held constant PER AGENT (2026-08-30). SB3 counts
+    total_timesteps as the sum across the vec env, and SuperSuit sets
+    num_envs = n_agents, so a flat 50_000 gave each agent 50_176 / 25_088 /
+    12_800 env steps at n_agents = 1 / 2 / 4 - a 4x spread in experience and
+    in gradient updates, running along the very axis this grid varies. The
+    competition effect would have been confounded with training budget.
+    Scaling by n_agents gives every agent ~50k env steps regardless.
     """
     jobs = []
     for value_agents in (10, 50, 150, 400):
@@ -85,6 +93,7 @@ def suite_grid():
                     f"v{value_agents}_n{n_agents}/seed{s}",
                     ["--num-value-agents", value_agents, "--seed", s],
                     n_agents=n_agents,
+                    timesteps=50_000 * n_agents,
                 ))
     return jobs
 
