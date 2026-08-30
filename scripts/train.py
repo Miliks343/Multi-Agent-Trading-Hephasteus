@@ -25,13 +25,38 @@ import subprocess
 import time
 from pathlib import Path
 
+import numpy as np
 import supersuit as ss
 from stable_baselines3 import PPO
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.utils import set_random_seed
-from stable_baselines3.common.vec_env import VecMonitor, VecNormalize
+from stable_baselines3.common.vec_env import VecEnvWrapper, VecMonitor, VecNormalize
 
 from marl_lob.env import MarlLobEnv
+
+
+class BoolDones(VecEnvWrapper):
+    """Cast SuperSuit's uint8 done flags to bool.
+
+    SuperSuit builds terminations/truncations with dtype=np.uint8. SB3's
+    VecNormalize then runs `self.returns[dones] = 0`, which on an integer
+    dtype is fancy indexing, not boolean masking:
+
+      n_agents=1, dones=[1]   -> returns[1] -> IndexError (hard crash)
+      n_agents>1, dones=[0,0] -> zeroes returns[0] every non-terminal step
+      n_agents>1, dones=[1,1] -> zeroes only returns[1], leaving the rest
+
+    train.py sets norm_reward=True, so the corrupted `returns` feeds ret_rms,
+    which scales every reward. The corrupted fraction is 1/n_agents, so the
+    distortion tracks n_agents - the grid's own independent variable.
+    """
+
+    def reset(self):
+        return self.venv.reset()
+
+    def step_wait(self):
+        obs, rewards, dones, infos = self.venv.step_wait()
+        return obs, rewards, np.asarray(dones, dtype=bool), infos
 
 
 def make_env(
@@ -57,6 +82,7 @@ def make_env(
     env = ss.concat_vec_envs_v1(
         env, num_vec_envs=num_vec_envs, num_cpus=1, base_class="stable_baselines3"
     )
+    env = BoolDones(env)
     env = VecMonitor(env)
     if vecnormalize:
         env = VecNormalize(
