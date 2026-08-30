@@ -18,6 +18,14 @@ from pathlib import Path
 
 SEEDS = (0, 1, 7)
 
+# The grid needs far more seeds than the cheap suite. Measured on the 3-seed
+# equalised grid (2026-08-30, M4): the spread of the 12 cell means was sd=838
+# while the median within-cell seed sd was 1153, i.e. signal/noise = 0.73 - the
+# design could not resolve its own competition effect. Detecting an effect that
+# size against that noise at ~2 standard errors needs ~15 seeds per cell.
+# Superset of SEEDS, so the 3-seed runs remain a subset.
+GRID_SEEDS = tuple(range(15))
+
 # Eval seeds are cheap (~30s each, no training) and a single one leaves every
 # number in the writeup resting on one sampled market. Three is the difference
 # between "the agent made $X" and "the agent made $X across three markets".
@@ -88,7 +96,7 @@ def suite_grid():
     jobs = []
     for value_agents in (10, 50, 150, 400):
         for n_agents in (1, 2, 4):
-            for s in SEEDS:
+            for s in GRID_SEEDS:
                 jobs.append(job(
                     f"v{value_agents}_n{n_agents}/seed{s}",
                     ["--num-value-agents", value_agents, "--seed", s],
@@ -141,8 +149,9 @@ def main():
 
     print(f"wrote {len(jobs)} jobs to {jobs_dir.relative_to(repo)}")
     if args.suite == "grid":
-        print("NOTE: 36 runs. At ~11 min/run sequential that is ~7h; at -j8 "
-              "roughly an hour, less on fast hardware.")
+        print(f"NOTE: {len(jobs)} runs at {len(GRID_SEEDS)} seeds/cell. "
+              "Measured on an M4 at -j8: ~56 min for the 36-job 3-seed "
+              "version, so budget ~5h here and far longer on a slow box.")
 
 
 if __name__ == "__main__":
