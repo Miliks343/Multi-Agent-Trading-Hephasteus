@@ -10,6 +10,7 @@ Assumes scripts/run_baseline.py has been run on the same seeds first
 from __future__ import annotations
 
 import argparse
+import pickle
 import warnings
 from pathlib import Path
 from typing import NamedTuple
@@ -22,6 +23,32 @@ from marl_lob.metrics import compute_all
 from marl_lob.trajectory import Trajectory, load_trajectory, save_trajectory
 
 warnings.filterwarnings("ignore")
+
+
+def load_obs_normalizer(checkpoint: Path):
+    """Return raw-obs -> policy-space-obs, or None if the model wants raw obs.
+
+    A policy trained with --norm-obs expects VecNormalize-standardised
+    observations. Feeding it raw ones evaluates a different input distribution
+    than it was trained on: no crash, no warning, just meaningless numbers.
+    train.py saves the running statistics next to the checkpoint precisely so
+    eval can reproduce them.
+    """
+    pkl = checkpoint.parent / "vecnormalize.pkl"
+    if not pkl.is_file():
+        return None
+    with pkl.open("rb") as fh:
+        vn = pickle.load(fh)
+    if not getattr(vn, "norm_obs", False):
+        return None  # norm_reward only - observations were raw during training
+    rms, clip, eps = vn.obs_rms, vn.clip_obs, vn.epsilon
+
+    def normalize(obs: np.ndarray) -> np.ndarray:
+        return np.clip(
+            (obs - rms.mean) / np.sqrt(rms.var + eps), -clip, clip
+        ).astype(np.float32)
+
+    return normalize
 
 
 class Rollout(NamedTuple):
@@ -38,8 +65,14 @@ class Rollout(NamedTuple):
     observations: np.ndarray
 
 
-def rollout_ppo(env: MarlLobEnv, model, seed: int, max_steps: int) -> dict[str, Rollout]:
-    """Run a deterministic-policy rollout, return per-agent Rollout."""
+def rollout_ppo(env: MarlLobEnv, model, seed: int, max_steps: int,
+                normalize=None) -> dict[str, Rollout]:
+    """Run a deterministic-policy rollout, return per-agent Rollout.
+
+    `normalize` maps raw observations into the space the policy was trained
+    in; observations are logged raw either way, since that is what the
+    market actually showed the agent."""
+    to_policy = normalize if normalize is not None else (lambda o: o)
     obs, info = env.reset(seed=seed)
     rows: dict[str, list[tuple]] = {
         a: [info[a]["traj_row"]] for a in env.possible_agents
@@ -52,7 +85,7 @@ def rollout_ppo(env: MarlLobEnv, model, seed: int, max_steps: int) -> dict[str, 
         if not env.agents:
             break
         actions = {
-            a: model.predict(obs[a], deterministic=True)[0].astype(np.float32)
+            a: model.predict(to_policy(obs[a]), deterministic=True)[0].astype(np.float32)
             for a in env.agents
         }
         for a, act in actions.items():
@@ -121,10 +154,14 @@ def main():
     args.out_dir.mkdir(parents=True, exist_ok=True)
     model = PPO.load(args.checkpoint)
     print(f"loaded checkpoint: {args.checkpoint}")
+    normalize = load_obs_normalizer(args.checkpoint)
+    print("obs normalisation: "
+          + ("VecNormalize stats from vecnormalize.pkl"
+             if normalize is not None else "none (policy trained on raw obs)"))
 
     for seed in args.seeds:
         env = MarlLobEnv(n_agents=args.n_agents, max_inventory=10_000)
-        rollouts = rollout_ppo(env, model, seed, args.max_steps)
+        rollouts = rollout_ppo(env, model, seed, args.max_steps, normalize)
         env.close()
 
         print(f"\n== seed {seed} ==")
