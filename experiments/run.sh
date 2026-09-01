@@ -16,6 +16,17 @@ shift || true
 # Default concurrency: leave 2 cores for the OS, cap at 8. Each ABIDES sim
 # spawns 2000+ background agents, so this is RAM-bound as much as CPU-bound -
 # on a machine with little memory, pass -j 1.
+# One thread per job. torch defaults to one thread per core, so N concurrent
+# jobs ask for N*ncpu threads and the machine thrashes. Measured on an 8-core
+# i7-9700K at -j8: 193 threads on 8 cores, load ~52, and a v10_n1 cell took
+# 5824s. With these set it takes 212s - a 27x difference, entirely context
+# switching. The policy is a 64x64 MLP and the bottleneck is the
+# single-threaded ABIDES kernel, so intra-op parallelism buys nothing here;
+# the win is running many sims at once, which is what -j does.
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+
 NCPU="$( (sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 2) )"
 JOBS=$(( NCPU - 2 )); [ "$JOBS" -lt 1 ] && JOBS=1; [ "$JOBS" -gt 8 ] && JOBS=8
 while [ $# -gt 0 ]; do
