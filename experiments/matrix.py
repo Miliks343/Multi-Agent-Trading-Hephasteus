@@ -24,7 +24,23 @@ SEEDS = (0, 1, 7)
 # design could not resolve its own competition effect. Detecting an effect that
 # size against that noise at ~2 standard errors needs ~15 seeds per cell.
 # Superset of SEEDS, so the 3-seed runs remain a subset.
-GRID_SEEDS = tuple(range(15))
+def _grid_seeds():
+    """Seed set for the grid, overridable with MARL_GRID_SEEDS.
+
+    Accepts "0-14" or "15,16,17". Lets a second machine extend the seed pool
+    without editing this file: results are keyed by seed and carry their host
+    in run_meta.json, so the pools merge.
+    """
+    spec = os.environ.get("MARL_GRID_SEEDS", "").strip()
+    if not spec:
+        return tuple(range(15))
+    if "-" in spec and "," not in spec:
+        lo, hi = spec.split("-")
+        return tuple(range(int(lo), int(hi) + 1))
+    return tuple(int(x) for x in spec.split(","))
+
+
+GRID_SEEDS = _grid_seeds()
 
 # Eval seeds are cheap (~30s each, no training) and a single one leaves every
 # number in the writeup resting on one sampled market. Three is the difference
@@ -93,10 +109,16 @@ def suite_grid():
     competition effect would have been confounded with training budget.
     Scaling by n_agents gives every agent ~50k env steps regardless.
     """
+    # Seed-major on purpose. The runner walks jobs in filename order, so this
+    # makes every seed complete across all 12 cells before the next seed
+    # starts. A run cut short then leaves a COMPLETE BALANCED design at
+    # whatever seed count finished, instead of all of v10 and none of v400.
+    # Two of these runs have already been killed mid-flight; this makes that
+    # cost seeds rather than the whole grid.
     jobs = []
-    for value_agents in (10, 50, 150, 400):
-        for n_agents in (1, 2, 4):
-            for s in GRID_SEEDS:
+    for s in GRID_SEEDS:
+        for value_agents in (10, 50, 150, 400):
+            for n_agents in (1, 2, 4):
                 jobs.append(job(
                     f"v{value_agents}_n{n_agents}/seed{s}",
                     ["--num-value-agents", value_agents, "--seed", s],
