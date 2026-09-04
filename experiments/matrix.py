@@ -25,29 +25,43 @@ SEEDS = (0, 1, 7)
 # an effect the size of the single-seed gate's is real.
 GATE_SEEDS = tuple(range(10))
 
+# Twenty seeds for grid2. Chosen so the suite can be EXTENDED rather than
+# re-run: seeds are contiguous from 0, jobs are seed-major, and adding
+# 20..49 later only adds files. Sized off the primary dependent variable -
+# withdrawn% has a seed sd of ~15-17pp, so a real 20->60pp swing across
+# informed flow resolves at 20 seeds, and a +-5pp wobble would not resolve at
+# 50 either. Override with MARL_GRID2_SEEDS.
 # The grid needs far more seeds than the cheap suite. Measured on the 3-seed
 # equalised grid (2026-08-30, M4): the spread of the 12 cell means was sd=838
 # while the median within-cell seed sd was 1153, i.e. signal/noise = 0.73 - the
 # design could not resolve its own competition effect. Detecting an effect that
 # size against that noise at ~2 standard errors needs ~15 seeds per cell.
 # Superset of SEEDS, so the 3-seed runs remain a subset.
-def _grid_seeds():
-    """Seed set for the grid, overridable with MARL_GRID_SEEDS.
+def _seed_spec(env_var, default):
+    """Seed set for a suite, overridable from the environment.
 
     Accepts "0-14" or "15,16,17". Lets a second machine extend the seed pool
     without editing this file: results are keyed by seed and carry their host
     in run_meta.json, so the pools merge.
     """
-    spec = os.environ.get("MARL_GRID_SEEDS", "").strip()
+    spec = os.environ.get(env_var, "").strip()
     if not spec:
-        return tuple(range(15))
+        return tuple(default)
     if "-" in spec and "," not in spec:
         lo, hi = spec.split("-")
         return tuple(range(int(lo), int(hi) + 1))
     return tuple(int(x) for x in spec.split(","))
 
 
-GRID_SEEDS = _grid_seeds()
+GRID_SEEDS = _seed_spec("MARL_GRID_SEEDS", range(15))
+
+# Twenty seeds for grid2. Chosen so the suite can be EXTENDED rather than
+# re-run: seeds are contiguous from 0, jobs are seed-major, and adding
+# 20..49 later only adds files. Sized off the primary dependent variable -
+# withdrawn% has a seed sd of ~15-17pp, so a real 20->60pp swing across
+# informed flow resolves at 20 seeds, and a +-5pp wobble would not resolve at
+# 50 either. Override with MARL_GRID2_SEEDS.
+GRID2_SEEDS = _seed_spec("MARL_GRID2_SEEDS", range(20))
 
 # Eval seeds are cheap (~30s each, no training) and a single one leaves every
 # number in the writeup resting on one sampled market. Three is the difference
@@ -228,9 +242,59 @@ def suite_gate():
     return jobs
 
 
+def suite_grid2():
+    """informed flow x competition, on the gated action space. The spine.
+
+    This is `suite_grid` re-run on code where the two prerequisites it silently
+    depended on are actually met. The 2026-09 grid found nothing because the
+    treatment was never applied: the agent posted a genuine two-sided market on
+    ~2% of steps (`notes/grid_results.md`), and its "competing" agents were the
+    same bot, quoting identically on 97-99.9% of steps
+    (`notes/agent_divergence_results.md`). Both are now fixed and verified at
+    10 seeds in `notes/gate_results.md`.
+
+    The question has changed with them. `withdrawn%` used to be a rounding
+    artifact and is now a gate the policy sets, so the Glosten-Milgrom
+    prediction is directly testable rather than inferred from P&L. And because
+    a properly quoting agent already loses at the default 50 value agents
+    (-$1,373 per agent), the decisive cell is **v10_n1**: least informed flow,
+    no competition. If a market maker cannot make money there, there is no
+    viable region anywhere in this parameterisation - which is a result, not a
+    failure.
+
+    PREDICTIONS, committed before running:
+      1. Withdrawal rate RISES with informed flow.
+      2. Quoted spread WIDENS with informed flow.
+      3. Delta-equity is NEGATIVE at every cell, v10_n1 included - no viable
+         region.
+      4. Competition effects stay small. Unlike the 2026-09 grid this is now a
+         genuine test rather than a null by construction, because n_agents
+         finally varies competitors rather than copies of one policy.
+
+    `agent_id_width` is pinned to 4 so every cell shares one observation width
+    regardless of n_agents; without it the 1/2/4 cells would train different
+    input layers and stop being comparable. Budget stays 50k env steps per
+    agent (E4).
+    """
+    jobs = []
+    # Seed-major, for the reason given in suite_grid: a run cut short leaves a
+    # complete balanced design at whatever seed count finished.
+    for s in GRID2_SEEDS:
+        for value_agents in (10, 50, 150, 400):
+            for n_agents in (1, 2, 4):
+                jobs.append(job(
+                    f"v{value_agents}_n{n_agents}/seed{s}",
+                    ["--num-value-agents", value_agents,
+                     "--agent-id-width", 4, "--seed", s],
+                    n_agents=n_agents,
+                    timesteps=50_000 * n_agents,
+                ))
+    return jobs
+
+
 SUITES = {"smoke": suite_smoke, "cheap": suite_cheap,
           "grid": suite_grid, "retrain": suite_retrain,
-          "gate": suite_gate}
+          "gate": suite_gate, "grid2": suite_grid2}
 
 
 def main():
