@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from marl_lob.env import MarlLobEnv
+from marl_lob.observation_extractor import obs_vector_size
 
 
 # ── _equity_from_traj_row ───────────────────────────────────────────────────
@@ -115,7 +116,8 @@ def test_reset_returns_correct_obs_shapes_and_info_keys(env):
     obs, info = env.reset(seed=42)
     assert set(obs.keys()) == {"mm_0", "mm_1"}
     for v in obs.values():
-        assert v.shape == (44,)
+        # 4*K+4 book/scalar features plus the n_agents-wide identity one-hot.
+        assert v.shape == (obs_vector_size(env.k, env.n_agents),)
         assert v.dtype == np.float32
     for v in info.values():
         assert "traj_row" in v
@@ -125,7 +127,9 @@ def test_reset_returns_correct_obs_shapes_and_info_keys(env):
 @pytest.mark.abides
 def test_traj_row_dtypes_match_trajectory_contract(env):
     obs, info = env.reset(seed=42)
-    acts = {a: np.array([2.0, 2.0, 5.0, 5.0], dtype=np.float32) for a in env.agents}
+    # Gated layout: both gates open, 2c each side, 5 shares.
+    acts = {a: np.array([1.0, 1.0, 2.0, 2.0, 5.0, 5.0], dtype=np.float32)
+            for a in env.agents}
     _obs, _r, _t, _tr, info = env.step(acts)
     ts, inv, cash, mid, fill_qty, fill_price = info["mm_0"]["traj_row"]
     assert isinstance(ts, float)
@@ -159,9 +163,11 @@ def test_terminated_agent_drops_out_of_active_set():
     """Force-spike mm_0's inventory; it should leave self.agents."""
     e = MarlLobEnv(n_agents=2, max_inventory=20)
     obs, info = e.reset(seed=42)
-    # Aggressive bid (offset 0, size 100) on mm_0; mm_1 stays passive.
-    aggressive = np.array([0.0, 50.0, 100.0, 0.0], dtype=np.float32)
-    passive = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    # Aggressive bid on mm_0 — bid gate open at the tightest offset and full
+    # size, ask gate shut, so inventory can only accumulate long. mm_1 keeps
+    # both gates shut and quotes nothing.
+    aggressive = np.array([1.0, -1.0, 0.0, 50.0, 100.0, 0.0], dtype=np.float32)
+    passive = np.array([-1.0, -1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
     for _ in range(20):
         if "mm_0" not in e.agents:
             break

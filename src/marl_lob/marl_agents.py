@@ -16,7 +16,11 @@ from typing import Any, Optional
 
 import numpy as np
 
-from .actions import translate_action
+from .actions import (
+    DEFAULT_MIN_OFFSET_TICKS,
+    DEFAULT_MIN_QUOTE_SIZE,
+    translate_action,
+)
 from .agent_adapter import dispatch_intents, project_resting_orders
 from .observation_extractor import (
     DEFAULT_K,
@@ -112,6 +116,7 @@ def build_per_agent_state(
     starting_cash: int = DEFAULT_STARTING_CASH,
     max_inventory: int = DEFAULT_MAX_INVENTORY,
     max_size: int = DEFAULT_MAX_SIZE,
+    agent_id_width: int = 0,
 ) -> list[dict[str, Any]]:
     """Build the per-agent payload the env consumes.
 
@@ -131,7 +136,7 @@ def build_per_agent_state(
         mid_cents = 0
 
     out: list[dict[str, Any]] = []
-    for snap in snapshots:
+    for agent_index, snap in enumerate(snapshots):
         obs = extract_obs(
             known_bids=known_bids,
             known_asks=known_asks,
@@ -144,6 +149,8 @@ def build_per_agent_state(
             max_inventory=max_inventory,
             max_size=max_size,
             starting_cash=starting_cash,
+            agent_index=agent_index,
+            agent_id_width=agent_id_width,
         )
         fill_qty, fill_px = _aggregate_fills(snap.fills)
         out.append({
@@ -175,8 +182,9 @@ except Exception:  # pragma: no cover
 class MarlChild(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
     """ABIDES trading agent driven by an externally-set `pending_action`.
 
-    The coordinator's `apply_actions` writes a 4-tuple into `pending_action`
-    each wrapper-tick. The next time this agent's wakeup fires (a few ns
+    The coordinator's `apply_actions` writes an action vector into
+    `pending_action` each wrapper-tick - a 6-tuple when `gated`, else the
+    legacy 4-tuple. The next time this agent's wakeup fires (a few ns
     after the coordinator's), it reads the action, runs `translate_action`,
     dispatches the resulting intents, and clears `pending_action`.
     """
@@ -189,6 +197,9 @@ class MarlChild(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
         *,
         max_size: int = 100,
         tick_size: int = 1,
+        gated: bool = False,
+        min_offset_ticks: int = DEFAULT_MIN_OFFSET_TICKS,
+        min_quote_size: int = DEFAULT_MIN_QUOTE_SIZE,
         name: Optional[str] = None,
         type: Optional[str] = None,
         random_state=None,
@@ -207,7 +218,10 @@ class MarlChild(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
         )
         self.max_size = max_size
         self.tick_size = tick_size
-        self.pending_action: Optional[tuple[float, float, float, float]] = None
+        self.gated = gated
+        self.min_offset_ticks = min_offset_ticks
+        self.min_quote_size = min_quote_size
+        self.pending_action: Optional[tuple[float, ...]] = None
 
     def act_on_wakeup(self) -> None:  # pragma: no cover — ABIDES-driven
         # Schedule the next wakeup unconditionally — even if we have no
@@ -237,6 +251,9 @@ class MarlChild(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
             resting_orders=project_resting_orders(self.orders),
             max_size=self.max_size,
             tick_size=self.tick_size,
+            gated=self.gated,
+            min_offset_ticks=self.min_offset_ticks,
+            min_quote_size=self.min_quote_size,
         )
         # ABIDES' place_limit_order expects a Side enum, not a bool. Adapt
         # here so dispatch_intents stays ABIDES-free for Neil's unit tests.
@@ -271,6 +288,7 @@ class MarlCoordinator(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
         k: int = DEFAULT_K,
         max_inventory: int = DEFAULT_MAX_INVENTORY,
         max_size: int = DEFAULT_MAX_SIZE,
+        agent_id_width: int = 0,
         name: Optional[str] = None,
         type: Optional[str] = None,
         random_state=None,
@@ -293,6 +311,7 @@ class MarlCoordinator(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
         self.k = k
         self.max_inventory = max_inventory
         self.max_size_norm = max_size
+        self.agent_id_width = agent_id_width
         self._starting_cash_norm = starting_cash
 
     def apply_actions(self, actions: list[dict[str, Any]]) -> None:  # pragma: no cover
@@ -327,6 +346,7 @@ class MarlCoordinator(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
                 starting_cash=self._starting_cash_norm,
                 max_inventory=self.max_inventory,
                 max_size=self.max_size_norm,
+                agent_id_width=self.agent_id_width,
             ),
             "timestamp_s": (int(self.current_time) - self.mkt_open_ns) / 1e9,
         }

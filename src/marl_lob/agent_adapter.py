@@ -16,6 +16,8 @@ from .actions import (
     Intent,
     PlaceIntent,
     RestingOrder,
+    DEFAULT_MIN_OFFSET_TICKS,
+    DEFAULT_MIN_QUOTE_SIZE,
     translate_action,
 )
 
@@ -91,6 +93,9 @@ class MarlAgent(TradingAgent):  # type: ignore[misc, valid-type]
         observation_fn: Callable,
         max_size: int = 100,
         tick_size: int = 1,
+        gated: bool = False,
+        min_offset_ticks: int = DEFAULT_MIN_OFFSET_TICKS,
+        min_quote_size: int = DEFAULT_MIN_QUOTE_SIZE,
         random_state=None,
     ) -> None:
         if not _ABIDES_AVAILABLE:
@@ -104,12 +109,25 @@ class MarlAgent(TradingAgent):  # type: ignore[misc, valid-type]
         self.observation_fn = observation_fn
         self.max_size = max_size
         self.tick_size = tick_size
+        self.gated = gated
+        self.min_offset_ticks = min_offset_ticks
+        self.min_quote_size = min_quote_size
 
     def wakeup(self, current_time):  # pragma: no cover — exercised in ABIDES-gated test
         super().wakeup(current_time)
         obs = self.observation_fn(self, current_time)
         action = self.policy_fn(obs)
-        mid_price = int(obs["mid_price"]) if isinstance(obs, dict) else int(obs[-1])
+        # A bare-array observation carries no mid-price: the vector is
+        # normalised and its last element is time-to-close (or, once an
+        # identity one-hot is appended, an ID bit). Callers that want this
+        # adapter to quote must hand back a dict with an explicit
+        # "mid_price"; anything else is a caller bug, not a value to guess.
+        if not isinstance(obs, dict) or "mid_price" not in obs:
+            raise TypeError(
+                "observation_fn must return a mapping containing 'mid_price'; "
+                "the observation vector does not carry an unnormalised mid."
+            )
+        mid_price = int(obs["mid_price"])
         intents = translate_action(
             action=tuple(action),
             agent_id=self.id,
@@ -118,6 +136,9 @@ class MarlAgent(TradingAgent):  # type: ignore[misc, valid-type]
             resting_orders=project_resting_orders(self.orders),
             max_size=self.max_size,
             tick_size=self.tick_size,
+            gated=self.gated,
+            min_offset_ticks=self.min_offset_ticks,
+            min_quote_size=self.min_quote_size,
         )
         dispatch_intents(
             intents,

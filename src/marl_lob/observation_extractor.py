@@ -16,7 +16,25 @@ K .. 2K-1   Bid sizes   (top K levels), normalised by max_size
 4K+1        Cash        (cents),         normalised by starting_cash
 4K+2        Spread      (cents / mid),   dimensionless
 4K+3        Time-to-close (seconds),     normalised by session_duration_s
+4K+4 ..     Agent identity one-hot, width `agent_id_width` (0 = omitted)
 ─────────────────────────────────────────────────────────────────────────────
+
+Why the identity one-hot exists
+───────────────────────────────
+SuperSuit presents the N PettingZoo agents to SB3 as N parallel copies of a
+single-agent env, so one policy network is trained on the pooled experience and
+every agent evaluates the same weights. Of the 4K+4 features above, only
+`inventory` and `cash` can differ between two agents watching the same book -
+and measured across 4,350 agent pairs, that was not enough: the agents' quotes
+were identical on 97-99.9% of steps once quantised to whole ticks
+(`notes/agent_divergence_results.md`). Varying `n_agents` therefore varied the
+number of *copies* of one policy, not the amount of competition.
+
+Appending an identity one-hot lets the shared network condition on which agent
+it is, so the agents can differentiate without paying for N separate networks.
+`agent_id_width` is separate from `n_agents` on purpose: pinning it to a fixed
+width (e.g. 4) keeps the observation dimension constant across a grid that
+varies `n_agents`, so cells stay comparable.
 
 All values are clipped to [-1, 1] before returning.
 
@@ -53,9 +71,13 @@ NS_PER_SECOND         = 1_000_000_000
 # Public API
 # ──────────────────────────────────────────────────────────────────────────────
 
-def obs_vector_size(k: int = DEFAULT_K) -> int:
-    """Returns the length of the observation vector for a given depth K."""
-    return 4 * k + 4
+def obs_vector_size(k: int = DEFAULT_K, agent_id_width: int = 0) -> int:
+    """Returns the length of the observation vector.
+
+    ``agent_id_width`` is the width of the trailing identity one-hot; 0 omits
+    it entirely, which is the pre-2026-09 layout.
+    """
+    return 4 * k + 4 + max(int(agent_id_width), 0)
 
 
 def extract_obs(
@@ -70,6 +92,8 @@ def extract_obs(
     max_inventory: int = DEFAULT_MAX_INVENTORY,
     max_size: int = DEFAULT_MAX_SIZE,
     starting_cash: int = DEFAULT_STARTING_CASH,
+    agent_index: int | None = None,
+    agent_id_width: int = 0,
 ) -> np.ndarray:
     """
     Convert ABIDES book state + agent state → 1D float32 numpy array.
@@ -83,10 +107,13 @@ def extract_obs(
     current_time, mkt_open, mkt_close : NanosecondTime ints from ABIDES kernel
     k          : number of price levels to include each side
     max_inventory, max_size, starting_cash : normalisation constants
+    agent_index : which agent this observation is for; sets the hot element of
+        the identity one-hot. Ignored when ``agent_id_width`` is 0.
+    agent_id_width : width of the trailing identity one-hot (0 = omitted)
 
     Returns
     -------
-    obs : np.ndarray, shape (4*k+4,), dtype float32, values in [-1, 1]
+    obs : np.ndarray, shape (4*k+4+agent_id_width,), float32, values in [-1, 1]
     """
     # ── mid-price (cents) ────────────────────────────────────────────────────
     best_bid = known_bids[0][0] if known_bids else None
@@ -120,16 +147,26 @@ def extract_obs(
     ttc_norm    = np.clip(1.0 - elapsed_ns / session_ns, 0.0, 1.0)  # 1=open, 0=close
 
     # ── assemble ─────────────────────────────────────────────────────────────
-    obs = np.concatenate([
+    parts = [
         bid_prices, bid_sizes,
         ask_prices, ask_sizes,
         [inv_norm, cash_norm, spread_norm, ttc_norm],
-    ]).astype(np.float32)
+    ]
 
+    width = max(int(agent_id_width), 0)
+    if width:
+        one_hot = np.zeros(width, dtype=np.float64)
+        # Out-of-range indices leave the one-hot all zeros rather than raising:
+        # an agent beyond the pinned width is unidentifiable, not invalid.
+        if agent_index is not None and 0 <= agent_index < width:
+            one_hot[agent_index] = 1.0
+        parts.append(one_hot)
+
+    obs = np.concatenate(parts).astype(np.float32)
     return np.clip(obs, -1.0, 1.0)
 
 
-def describe_obs(k: int = DEFAULT_K) -> List[str]:
+def describe_obs(k: int = DEFAULT_K, agent_id_width: int = 0) -> List[str]:
     """
     Returns a list of human-readable feature names in the same order as
     extract_obs(). Useful for debugging and documentation.
@@ -144,6 +181,7 @@ def describe_obs(k: int = DEFAULT_K) -> List[str]:
     for i in range(k):
         names.append(f"ask_size_L{i+1}_norm")
     names += ["inventory_norm", "cash_norm", "spread_norm", "time_to_close_norm"]
+    names += [f"agent_id_{i}" for i in range(max(int(agent_id_width), 0))]
     return names
 
 

@@ -26,6 +26,7 @@ from abides_markets.utils import config_add_agents
 
 from .configs import rmsc03_simple
 from .marl_agents import MarlChild, MarlCoordinator
+from .actions import DEFAULT_MIN_OFFSET_TICKS, DEFAULT_MIN_QUOTE_SIZE
 from .observation_extractor import (
     DEFAULT_K,
     DEFAULT_MAX_INVENTORY,
@@ -82,6 +83,11 @@ class MarlLobEnv(ParallelEnv):
         wakeup_interval: str = "1s",
         inventory_penalty: float = 1e-4,
         termination_penalty: float = -1.0,
+        gated_actions: bool = True,
+        min_offset_ticks: int = DEFAULT_MIN_OFFSET_TICKS,
+        min_quote_size: int = DEFAULT_MIN_QUOTE_SIZE,
+        agent_id_obs: bool = True,
+        agent_id_width: Optional[int] = None,
         config_kwargs: Optional[dict[str, Any]] = None,
     ) -> None:
         self.n_agents = n_agents
@@ -92,6 +98,15 @@ class MarlLobEnv(ParallelEnv):
         self.max_offset_cents = max_offset_cents
         self.tick_size = tick_size
         self.max_inventory = max_inventory
+        self.gated_actions = gated_actions
+        self.min_offset_ticks = min_offset_ticks
+        self.min_quote_size = min_quote_size
+        # Pinned rather than derived from n_agents so that a grid varying
+        # n_agents keeps a constant observation dimension across its cells.
+        self.agent_id_width = (
+            (n_agents if agent_id_width is None else int(agent_id_width))
+            if agent_id_obs else 0
+        )
         self.symbol = symbol
         self.historical_date = historical_date
         self.start_time = start_time
@@ -105,18 +120,35 @@ class MarlLobEnv(ParallelEnv):
         self.agents: list[str] = []
         self.render_mode = None  # required by SuperSuit's MarkovVectorEnv
 
-        obs_dim = obs_vector_size(k)
+        obs_dim = obs_vector_size(k, self.agent_id_width)
         self._obs_space = spaces.Box(
             low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32
         )
-        self._act_space = spaces.Box(
-            low=np.array([0.0, 0.0, float(min_size), float(min_size)], dtype=np.float32),
-            high=np.array(
-                [max_offset_cents, max_offset_cents, max_size, max_size],
+        if gated_actions:
+            # (bid_gate, ask_gate, bid_offset, ask_offset, bid_size, ask_size).
+            # Gates span [-1, 1] and quote when > 0, so a policy initialised at
+            # mean ~0 sits on the decision boundary instead of inside a
+            # zero-gradient no-quote region. See actions.py for the mechanism.
+            self._act_space = spaces.Box(
+                low=np.array(
+                    [-1.0, -1.0, 0.0, 0.0, float(min_size), float(min_size)],
+                    dtype=np.float32),
+                high=np.array(
+                    [1.0, 1.0, max_offset_cents, max_offset_cents,
+                     max_size, max_size],
+                    dtype=np.float32),
                 dtype=np.float32,
-            ),
-            dtype=np.float32,
-        )
+            )
+        else:
+            self._act_space = spaces.Box(
+                low=np.array(
+                    [0.0, 0.0, float(min_size), float(min_size)], dtype=np.float32),
+                high=np.array(
+                    [max_offset_cents, max_offset_cents, max_size, max_size],
+                    dtype=np.float32,
+                ),
+                dtype=np.float32,
+            )
 
         self.kernel: Optional[Kernel] = None
         self._coord: Optional[MarlCoordinator] = None
@@ -172,6 +204,9 @@ class MarlLobEnv(ParallelEnv):
                 starting_cash=self.starting_cash,
                 max_size=self.max_size,
                 tick_size=self.tick_size,
+                gated=self.gated_actions,
+                min_offset_ticks=self.min_offset_ticks,
+                min_quote_size=self.min_quote_size,
                 wakeup_interval_generator=ConstantTimeGenerator(
                     step_duration=wakeup_ns
                 ),
@@ -190,6 +225,7 @@ class MarlLobEnv(ParallelEnv):
             k=self.k,
             max_inventory=self.max_inventory,
             max_size=self.max_size,
+            agent_id_width=self.agent_id_width,
             wakeup_interval_generator=ConstantTimeGenerator(
                 step_duration=wakeup_ns
             ),
@@ -238,12 +274,16 @@ class MarlLobEnv(ParallelEnv):
         dict[str, dict],
     ]:
         # Pass actions only for agents that haven't been terminated. For a
-        # terminated agent, send a no-op (size 0) so the coordinator still
-        # has a slot per child but no orders go in.
+        # terminated agent, send a no-op so the coordinator still has a slot
+        # per child but no orders go in. Under the gated layout the no-op is
+        # a closed gate (a gate quotes only when strictly > 0, so 0.0 is off);
+        # under the legacy layout it is zero size. Both resolve to "post
+        # nothing", but the arity has to match the action space.
+        noop = (0.0,) * self._act_space.shape[0]
         action_list = []
         for i, agent in enumerate(self.possible_agents):
             if self._terminated[agent]:
-                vec = (0.0, 0.0, 0.0, 0.0)
+                vec = noop
             else:
                 vec = tuple(float(x) for x in actions[agent])
             action_list.append({"agent_idx": i, "action_vec": vec})
