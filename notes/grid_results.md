@@ -75,6 +75,21 @@ selection of ~−900:
 Under 1% of the P&L comes from earning the spread. The agent is not being paid
 for liquidity; it is holding inventory and being marked to market.
 
+> **Correction 2026-09-04 — the participation percentages below are not
+> comparable to `scripts/quote_stats.py`.** This table came from a one-off
+> replay whose "offsets cross" and "size rounds to 0" columns were computed
+> unconditionally over all steps, which is why both land near 63%. The
+> shipped `participation_stats` requires *both* sides to carry positive size
+> before a cross can exist. Re-running it over these same saved artifacts
+> gives crossed 3.92% and any-quote 37.47% for `v50_n2`, against the 60.4%
+> and 15.6% below.
+>
+> **The two-sided column is unaffected** — it is defined identically in both,
+> and recomputes to 1.79% against the 1.9% reported here. Every conclusion in
+> this document rests on the two-sided figure and on spread capture, so none
+> of them changes. See `notes/gate_results.md` for the reconciliation, which
+> also confirms that a `legacy`-configured control reproduces this grid.
+
 **It is two-sided on 2% of steps.** Replaying the saved `actions` through the
 quantisation in `actions.py` (offsets → whole ticks, sizes → `int(round())`,
 both sides voided when `bid_price >= ask_price`):

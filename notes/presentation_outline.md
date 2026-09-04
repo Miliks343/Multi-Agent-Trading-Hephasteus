@@ -178,12 +178,40 @@ because adverse selection makes quoting unprofitable (Glosten-Milgrom, 1985).
 What the data shows is a **broken** refusal — a policy that never learned to
 quote at all.
 
-**[pending] What this act becomes if the gated action space works.** With
-withdrawal as an explicit action (see below), *withdrawal rate* becomes a
-directly measurable dependent variable: what fraction of steps did the agent
-choose not to quote, as informed flow rises? That is the phase diagram, in a
-form that is defensible because withdrawal is selected rather than imposed by
-rounding.
+**[solid, 2026-09-04] What happened when we fixed it.** The action space was
+rebuilt so that withdrawal is an explicit gated decision rather than a rounding
+artifact, and the agents were given an identity bit. 30 runs, 10 seeds, zero
+failures (`notes/gate_results.md`). In confidence order:
+
+- **Gated sides cannot cross.** 0.00% on every seed. Structural: with both
+  gates open and offsets floored at a tick, `bid <= mid-1 < mid+1 <= ask`.
+- **It quotes.** two-sided +14.0pp, any-quote +26.6pp, positive on 10/10
+  seeds (p = 0.002), at a ~2c spread instead of sub-tick noise.
+- **Only the identity bit differentiates the agents.** Quote agreement
+  99.6% -> 53.1%, 10/10 seeds. Gating alone is a clean null (p = 0.75) even
+  though it triples quoting. This is the tightest causal isolation in the
+  project and it pairs directly with the preempt slide above.
+- **And it still loses money.** legacy -$2,805, gated_noid -$1,373,
+  gated_id -$1,489. The gating improvement is not significant (7/10,
+  p = 0.34). One of 30 seed-cells is positive. An agent that genuinely makes
+  markets at ~2c into 2.4% informed flow loses.
+
+**[dead] The specialisation beat.** A single seed showed the two agents taking
+*opposite* inventory positions (corr -0.477) and it looked like the best result
+in the project. At 10 seeds it is **5 negative, 5 positive** - a coin flip. The
+claim "one bit of identity makes them specialise into opposite strategies" is
+withdrawn. What survives is the magnitude: every seed's correlation falls from
+~1.00, so the symmetry breaks reliably and the *direction* is arbitrary.
+
+This is the third time seed count has overturned an exciting single number
+here. It belongs in the methods footnote with the others.
+
+**[pending] Withdrawal rate vs informed flow.** `withdrawn%` is now a decision
+the policy makes (22.7% / 32.5% in the gated cells), so the phase diagram is
+answerable at last. Note the honest hypothesis has changed: given that a
+properly quoting agent loses at the default 2.4% informed flow, the question
+is no longer "where is the viability boundary" but "is there a viable region
+at all". Either answer is a result.
 
 > CLAIM SLOT — what this act concludes depends on whether the re-run produces
 > a withdrawal curve. Do not write it until the result exists.

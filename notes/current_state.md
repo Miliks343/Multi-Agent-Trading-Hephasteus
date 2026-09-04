@@ -3,13 +3,14 @@
 **Keep this file current.** It is the thing a fresh session should read first.
 Everything else in `notes/` is a record of a moment; this is the running state.
 
-Last updated: 2026-09-04.
+Last updated: 2026-09-04 (gate suite complete).
 
 ## The one-line summary
 
-The agent does not make markets. Four defects were found and fixed, the May PPO
-results have been retrained on the fixed code, and the presentation's two
-payoff acts (4 and 7) both lost the result they were built on.
+The agent now makes markets, and still loses money. The action space was
+rebuilt so withdrawal is a decision rather than a rounding artifact, and the
+agents were given an identity bit so they stop being the same bot; both are
+verified at 10 seeds. Acts 4 and 7 still need new claims.
 
 ## What is settled and quotable
 
@@ -39,7 +40,35 @@ payoff acts (4 and 7) both lost the result they were built on.
   trained against the E3 corrupted reward scale. Superseded by
   `notes/retrain_results.md`.
 
-## The blocker on re-running the grid
+## Landed 2026-09-04 — the gated action space and the identity one-hot
+
+See `notes/gate_results.md` (30 runs, 10 seeds, zero failures). In confidence
+order:
+
+1. **Gated sides cannot cross.** 0.00% on every seed; structural, not
+   statistical.
+2. **Gating increases quoting.** two-sided +14.0pp, any-quote +26.6pp, both
+   positive on 10/10 seeds (p = 0.002).
+3. **Only the identity bit differentiates the agents.** Quote agreement
+   99.6% -> 53.1%, 10/10 seeds. Gating alone is a clean null (-0.26pp,
+   p = 0.75) even though it triples quoting - more trading was never going to
+   be enough.
+4. **The direction of differentiation is a coin flip.** Inventory correlation
+   across 10 seeds: 5 negative, 5 positive, mean +0.149. The single-seed
+   "-0.477, they take opposite positions" result is **withdrawn**. What
+   survives is the magnitude: every seed falls from ~1.00.
+5. **A genuinely quoting agent still loses money.** legacy -$2,805,
+   gated_noid -$1,373, gated_id -$1,489; the gating improvement is *not*
+   significant (7/10, p = 0.34). One of 30 seed-cells is positive.
+
+Cost accepted: every pre-2026-09 PPO checkpoint is incomparable. The
+hand-coded F baseline is untouched and its numbers stand.
+
+**`withdrawn%` is now a real dependent variable** (22.7% / 32.5% in the gated
+cells) rather than a rounding artifact. Whether it rises with informed flow is
+the grid, and is now answerable.
+
+## Superseded — the old blocker on re-running the grid
 
 `grid_results.md` prescribes "a minimum tick offset and a minimum size" to
 remove the degenerate region, and names `both_hatches` as the precedent. **Half
@@ -54,17 +83,27 @@ The action space floors offsets at zero and this is hardcoded (`env.py:113`):
 
 With the floor at zero, offsets round to 0 on both sides, bid price equals ask
 price, and `translate_action` voids both — the 54.7% self-void measured in
-`retrain_results.md`. **A `--min-offset-cents` flag, mirroring `--min-size`, is
-the prerequisite for any grid re-run.** Not yet written. Re-running the grid
-without it reproduces the same null for the same reason.
+`retrain_results.md`. ~~**A `--min-offset-cents` flag, mirroring `--min-size`, is the prerequisite
+for any grid re-run.**~~ **Resolved 2026-09-04, but not this way.** The floor
+is applied inside the gated branch of `translate_action` and exposed as
+`--min-offset-ticks`; a ceiling-style flag would not have helped, because the
+problem was the *floor at zero*, not the ceiling. The grid re-run is
+unblocked.
 
 ## Decisions waiting on Pavel
 
-1. What act 4 claims now that the evasion result is gone.
-2. What replaces act 7. One proposal on the table: "we looked for emergence and
-   found a bug in ourselves," built on the contrast reading +448 (t=1.31) at 15
-   seeds and −88 at 50 — it reversed sign. Not signed off.
-3. Whether to cite May's 7-fills number at all, given its provenance.
+1. The spine sentence. North star as stated 2026-09-04: set up an environment,
+   tried a lot of things, hopefully got interesting behaviour; and teach the
+   room PPO plus probably a second algorithm. The teaching goal is agreed as
+   load-bearing. See the claim slot in `notes/presentation_outline.md`.
+2. What act 4 claims now that the evasion result is gone.
+3. What act 7 concludes. It now has real material: the agent was never playing
+   the game, three independent measurements say so, and once fixed it plays
+   and still loses.
+4. Whether to cite May's 7-fills number at all, given its provenance.
+
+Settled 2026-09-04: the clone measurement is a preempt slide rather than an
+act; the seed-count reversal is a methods footnote, not an act.
 
 ## Practical
 
