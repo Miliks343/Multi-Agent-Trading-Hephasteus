@@ -3,7 +3,7 @@
 **Keep this file current.** It is the thing a fresh session should read first.
 Everything else in `notes/` is a record of a moment; this is the running state.
 
-Last updated: 2026-09-04 (gate suite complete).
+Last updated: 2026-09-04 (grid2 running overnight).
 
 ## The one-line summary
 
@@ -67,6 +67,38 @@ hand-coded F baseline is untouched and its numbers stand.
 **`withdrawn%` is now a real dependent variable** (22.7% / 32.5% in the gated
 cells) rather than a rounding artifact. Whether it rises with informed flow is
 the grid, and is now answerable.
+
+## Running now — grid2, the spine
+
+Launched 2026-09-04 ~23:07 on the desktop, `setsid nohup experiments/run.sh
+grid2 -j 6 > /tmp/grid2.log`. **240 runs** (12 cells x 20 seeds), ~6 hours.
+Survives a Claude Code restart; it does not need a session attached.
+
+Predictions were **pre-registered before the first job** in
+`notes/grid2_preregistration.md`. Do not edit that file now.
+
+The decisive cell is **v10_n1** — least informed flow, no competition. A
+properly quoting agent already loses $1,373/agent at v50, and v10 is the only
+cell with less informed flow than that. If v10_n1 is not profitable there is no
+viable region anywhere in this parameterisation, which is a statement about the
+environment rather than about PPO.
+
+**To pick it up:**
+
+    ssh pavel@100.92.153.77
+    grep -E 'suite grid2 finished|NOTE:|FAIL' /tmp/grid2.log   # done?
+    cd ~/marl-lob
+    .work/venv/bin/python scripts/quote_stats.py grid2         # primary DV
+    .work/venv/bin/python scripts/agent_divergence.py runs/grid2/v50_n2/seed0/eval
+
+Analysis plan is in the pre-registration: contrasts **paired by training seed**
+with a sign test alongside t, n/sd/interval on every number, and
+`agent_divergence` as an acceptance check — any n>=2 cell whose `quote ident%`
+is not well below 99% did not receive its competition treatment and its
+competition result is void whatever it says.
+
+Seeds are contiguous from 0 and jobs are seed-major, so this extends to 20-49
+later by adding files rather than re-running (`MARL_GRID2_SEEDS=20-49`).
 
 ## Superseded — the old blocker on re-running the grid
 
