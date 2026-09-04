@@ -14,6 +14,14 @@
 > range. On corrected code, cells of this kind moved enough to flip sign
 > (`v50_n2/seed0`: +1179 → −595).
 >
+> **Superseded 2026-09-04 — the retrain is done.** All six cells were re-run on
+> fixed code; results are in `notes/retrain_results.md`, which is authoritative
+> for every PPO number. Headline: the frozen-policy result and the
+> "VecNormalize is load-bearing, keep the default inventory penalty" attribution
+> both survive; the `min_size` specification-gaming result (7 fills, quoting
+> ~50c off mid) does **not** — the retrained policy quotes tight and takes 1,181
+> fills instead.
+>
 > **Unaffected and still quotable: the Tier 2b F sweep below.** F is hand-coded
 > — no PPO, no VecNormalize — so the −$16,674 / −$11,727 default-F result, the
 > 56.6% / 62.7% drawdowns, and the **+$590** at spread=30/size=10 all stand.
