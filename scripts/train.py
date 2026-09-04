@@ -32,6 +32,7 @@ from stable_baselines3.common.logger import configure
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env import VecEnvWrapper, VecMonitor, VecNormalize
 
+from marl_lob.actions import DEFAULT_MIN_OFFSET_TICKS, DEFAULT_MIN_QUOTE_SIZE
 from marl_lob.env import MarlLobEnv
 
 
@@ -68,6 +69,11 @@ def make_env(
     norm_obs: bool = False,
     min_size: int = 0,
     max_offset_cents: int = 50,
+    gated_actions: bool = True,
+    min_offset_ticks: int = DEFAULT_MIN_OFFSET_TICKS,
+    min_quote_size: int = DEFAULT_MIN_QUOTE_SIZE,
+    agent_id_obs: bool = True,
+    agent_id_width: int | None = None,
     config_kwargs: dict | None = None,
 ):
     env = MarlLobEnv(
@@ -76,6 +82,11 @@ def make_env(
         inventory_penalty=inventory_penalty,
         min_size=min_size,
         max_offset_cents=max_offset_cents,
+        gated_actions=gated_actions,
+        min_offset_ticks=min_offset_ticks,
+        min_quote_size=min_quote_size,
+        agent_id_obs=agent_id_obs,
+        agent_id_width=agent_id_width,
         config_kwargs=config_kwargs,
     )
     env = ss.pettingzoo_env_to_vec_env_v1(env)
@@ -138,6 +149,30 @@ def main():
                              "escape hatches at once")
 
     # --- observation scaling ---
+    parser.add_argument("--legacy-actions", action="store_true",
+                        help="use the pre-2026-09 4-tuple action space "
+                             "(bid_offset, ask_offset, bid_size, ask_size). "
+                             "Sub-tick offsets and sub-unit sizes round to "
+                             "zero there, so 'post nothing' is a large "
+                             "zero-gradient region the policy initialises "
+                             "inside. Kept as an experimental control.")
+    parser.add_argument("--min-offset-ticks", type=int,
+                        default=DEFAULT_MIN_OFFSET_TICKS,
+                        help="floor on a gated-on side's offset, in ticks. "
+                             "At >=1 the two sides can never cross. 0 reopens "
+                             "the degenerate region.")
+    parser.add_argument("--min-quote-size", type=int,
+                        default=DEFAULT_MIN_QUOTE_SIZE,
+                        help="floor on a gated-on side's size, in shares")
+    parser.add_argument("--no-agent-id-obs", action="store_true",
+                        help="omit the agent-identity one-hot. Without it the "
+                             "shared policy cannot tell the agents apart and "
+                             "they quote near-identically - measured at "
+                             "97-99.9%% identical quotes.")
+    parser.add_argument("--agent-id-width", type=int, default=None,
+                        help="pin the identity one-hot width (default: "
+                             "n_agents). Pin it across a grid that varies "
+                             "n_agents so every cell shares one obs width.")
     parser.add_argument("--norm-obs", action="store_true",
                         help="normalise observations in VecNormalize. OFF by "
                              "default to match the May runs, but observations "
@@ -166,6 +201,11 @@ def main():
 
     env = make_env(
         args.num_vec_envs,
+        gated_actions=not args.legacy_actions,
+        min_offset_ticks=args.min_offset_ticks,
+        min_quote_size=args.min_quote_size,
+        agent_id_obs=not args.no_agent_id_obs,
+        agent_id_width=args.agent_id_width,
         n_agents=args.n_agents,
         inventory_penalty=args.inventory_penalty,
         vecnormalize=not args.no_vecnormalize,

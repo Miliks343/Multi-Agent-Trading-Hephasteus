@@ -13,6 +13,12 @@ continuous cents rounded to whole ticks, sizes are rounded to integers, and
 rounded ask. A policy emitting sub-tick offsets and sub-unit sizes therefore
 posts nothing at all while still producing a full-looking action array.
 
+Handles both action layouts. Under the gated layout ``withdrawn%`` is the
+share of steps on which the policy *chose* not to quote - a real behavioural
+measurement - whereas under the legacy layout not quoting is mostly an
+artifact of sub-tick rounding, and ``crossed%`` counts the self-voided steps
+that gating makes structurally impossible.
+
     python scripts/quote_stats.py retrain
     python scripts/quote_stats.py grid --cells v10_n1,v400_n4
 """
@@ -23,46 +29,27 @@ from pathlib import Path
 
 import numpy as np
 
-from marl_lob.actions import TICK_SIZE_CENTS
-
-
-def _q_offset(raw: float) -> int:
-    """Mirror actions._quantize_offset."""
-    return int(round(max(float(raw), 0.0) / TICK_SIZE_CENTS)) * TICK_SIZE_CENTS
-
-
-def _q_size(raw: float, max_size: int = 100) -> int:
-    """Mirror actions._quantize_size."""
-    return int(round(min(max(float(raw), 0.0), max_size)))
+from marl_lob.quote_analysis import participation_stats
 
 
 def cell_stats(npz_paths, max_size=100):
+    """Average the participation stats over every eval file in one cell."""
     agg = defaultdict(list)
     for f in npz_paths:
         d = np.load(f)
         if "actions" not in d:
             continue
         a = d["actions"]
-        bid_off = np.array([_q_offset(x) for x in a[:, 0]])
-        ask_off = np.array([_q_offset(x) for x in a[:, 1]])
-        bid_qty = np.array([_q_size(x, max_size) for x in a[:, 2]])
-        ask_qty = np.array([_q_size(x, max_size) for x in a[:, 3]])
-
-        bid_ok, ask_ok = bid_qty > 0, ask_qty > 0
-        # Prices are mid - bid_off and mid + ask_off, so the cross test
-        # (bid_price >= ask_price) reduces to -bid_off >= ask_off.
-        crossed = (bid_ok & ask_ok) & ((-bid_off) >= ask_off)
-        two_sided = (bid_ok & ask_ok) & ~crossed
-        any_quote = (bid_ok | ask_ok) & ~crossed
-
-        agg["two_sided_pct"].append(two_sided.mean() * 100)
-        agg["any_quote_pct"].append(any_quote.mean() * 100)
-        agg["crossed_pct"].append(crossed.mean() * 100)
-        agg["spread_cents"].append(
-            float((bid_off + ask_off)[two_sided].mean()) if two_sided.any() else 0.0
-        )
-        agg["raw_offset"].append(float(a[:, :2].mean()))
-        agg["raw_size"].append(float(a[:, 2:].mean()))
+        m = participation_stats(a, max_size)
+        for key in ("two_sided_pct", "any_quote_pct", "crossed_pct",
+                    "withdrawn_pct", "spread_cents"):
+            agg[key].append(m[key])
+        agg["gated"].append(float(m["gated"]))
+        # Raw means are reported over the offset and size columns only, which
+        # sit at different indices in the two layouts.
+        off_cols, size_cols = ((2, 4), (4, 6)) if m["gated"] else ((0, 2), (2, 4))
+        agg["raw_offset"].append(float(a[:, off_cols[0]:off_cols[1]].mean()))
+        agg["raw_size"].append(float(a[:, size_cols[0]:size_cols[1]].mean()))
         agg["fills"].append(
             int(len(d["fill_timestamps"])) if "fill_timestamps" in d else 0
         )
@@ -84,9 +71,9 @@ def main():
     cells = (args.cells.split(",") if args.cells
              else sorted(p.name for p in root.iterdir() if p.is_dir()))
 
-    hdr = ("cell", "two-sided%", "anyquote%", "crossed%", "spread(c)",
-           "rawoff", "rawsize", "fills")
-    print("%-16s%11s%11s%10s%11s%9s%9s%8s" % hdr)
+    hdr = ("cell", "gated", "two-sided%", "anyquote%", "withdrawn%",
+           "crossed%", "spread(c)", "rawoff", "rawsize", "fills")
+    print("%-16s%7s%11s%11s%12s%10s%11s%9s%9s%8s" % hdr)
     for cell in cells:
         paths = sorted(glob.glob(str(root / cell / "*" / "eval" / "*.npz")))
         if not paths:
@@ -94,9 +81,11 @@ def main():
         m = cell_stats(paths, args.max_size)
         if not m:
             continue
-        print("%-16s%11.1f%11.1f%10.1f%11.2f%9.3f%9.2f%8.0f" % (
-            cell, m["two_sided_pct"], m["any_quote_pct"], m["crossed_pct"],
-            m["spread_cents"], m["raw_offset"], m["raw_size"], m["fills"]))
+        print("%-16s%7s%11.1f%11.1f%12.1f%10.1f%11.2f%9.3f%9.2f%8.0f" % (
+            cell, "yes" if m["gated"] > 0.5 else "no",
+            m["two_sided_pct"], m["any_quote_pct"], m["withdrawn_pct"],
+            m["crossed_pct"], m["spread_cents"], m["raw_offset"],
+            m["raw_size"], m["fills"]))
 
 
 if __name__ == "__main__":

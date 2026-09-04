@@ -19,6 +19,7 @@ import numpy as np
 from stable_baselines3 import PPO
 
 from marl_lob.env import MarlLobEnv
+from marl_lob.observation_extractor import obs_vector_size
 from marl_lob.metrics import compute_all
 from marl_lob.trajectory import Trajectory, load_trajectory, save_trajectory
 
@@ -159,8 +160,31 @@ def main():
           + ("VecNormalize stats from vecnormalize.pkl"
              if normalize is not None else "none (policy trained on raw obs)"))
 
+    # Configure the env from the checkpoint's own spaces rather than from
+    # this script's defaults. SB3 stores both spaces in the zip, so a policy
+    # trained on the legacy 4-tuple / 44-dim layout and one trained on the
+    # gated 6-tuple / identity-suffixed layout both evaluate correctly without
+    # the caller having to remember which is which - and a mismatch raises
+    # here instead of silently feeding the policy the wrong contract.
+    gated = int(np.prod(model.action_space.shape)) == 6
+    agent_id_width = int(np.prod(model.observation_space.shape)) - obs_vector_size()
+    if agent_id_width < 0:
+        raise SystemExit(
+            f"checkpoint observation width "
+            f"{int(np.prod(model.observation_space.shape))} is smaller than the "
+            f"{obs_vector_size()}-dim base layout; k must differ from the default"
+        )
+    print(f"action layout: {'gated 6-tuple' if gated else 'legacy 4-tuple'}; "
+          f"agent-id width: {agent_id_width}")
+
     for seed in args.seeds:
-        env = MarlLobEnv(n_agents=args.n_agents, max_inventory=10_000)
+        env = MarlLobEnv(
+            n_agents=args.n_agents,
+            max_inventory=10_000,
+            gated_actions=gated,
+            agent_id_obs=agent_id_width > 0,
+            agent_id_width=agent_id_width,
+        )
         rollouts = rollout_ppo(env, model, seed, args.max_steps, normalize)
         env.close()
 
@@ -190,6 +214,13 @@ def main():
                 ppo,
                 actions=roll.actions,
                 observations=roll.observations,
+                # Layout metadata: the column meaning of `actions` and the
+                # width of the identity suffix in `observations` cannot be
+                # recovered from the arrays alone, and old and new files sit
+                # side by side in the same runs/ tree.
+                gated=np.array(int(gated)),
+                agent_id_width=np.array(agent_id_width),
+                n_agents=np.array(int(args.n_agents)),
             )
 
     print(f"\nPPO trajectories saved → {args.out_dir}/")
