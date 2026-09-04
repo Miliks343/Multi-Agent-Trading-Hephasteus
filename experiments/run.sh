@@ -27,7 +27,11 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
-NCPU="$( (sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 2) )"
+# NOT nproc: GNU coreutils nproc honours OMP_NUM_THREADS, which is exported to 1
+# a few lines above, so nproc would report 1 core and the default concurrency
+# would collapse to -j 1 on every Linux box. getconf reports the real count.
+# macOS never saw this because sysctl succeeds there and short-circuits.
+NCPU="$( (sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2) )"
 JOBS=$(( NCPU - 2 )); [ "$JOBS" -lt 1 ] && JOBS=1; [ "$JOBS" -gt 8 ] && JOBS=8
 while [ $# -gt 0 ]; do
   case "$1" in
