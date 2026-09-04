@@ -19,6 +19,12 @@ from pathlib import Path
 
 SEEDS = (0, 1, 7)
 
+# Ten seeds for the gate suite. Three was demonstrably too few here: the grid
+# resolved nothing at 3 (signal/noise 0.73) and reversed sign between 15 and
+# 50. Ten will not settle a magnitude either, but it is enough to say whether
+# an effect the size of the single-seed gate's is real.
+GATE_SEEDS = tuple(range(10))
+
 # The grid needs far more seeds than the cheap suite. Measured on the 3-seed
 # equalised grid (2026-08-30, M4): the spread of the 12 cell means was sd=838
 # while the median within-cell seed sd was 1153, i.e. signal/noise = 0.73 - the
@@ -182,8 +188,49 @@ def suite_retrain():
     return jobs
 
 
+def suite_gate():
+    """Does the gated action space make markets, and does one identity bit
+    make the agents distinct? At enough seeds to state a sign.
+
+    The single-seed gate (`notes/gate_results.md`) said yes to both, and threw
+    up a third thing worth replicating: with the identity one-hot the two
+    agents' inventory correlation went *negative* (-0.477), finishing at -86
+    and +651. Same network, one bit of identity, opposite positions. On one
+    seed that is an anecdote - `notes/grid_results.md` records a contrast that
+    read +448 (t=1.31) at 15 seeds and -88 at 50, reversing sign - so the
+    question here is only whether the sign survives replication.
+
+    Three cells isolate the two changes:
+
+      legacy      the pre-2026-09 4-tuple, no identity. The control, and the
+                  configuration every previous PPO number was measured on.
+      gated_noid  gated actions, no identity. Separates "can it quote" from
+                  "are they distinct" - the single-seed gate had this cell
+                  trading 12x more than legacy while still posting identical
+                  quotes on 99.94% of steps.
+      gated_id    both changes. The intended new default.
+
+    Budget is 50k env steps PER AGENT, matching `suite_grid` and
+    `suite_retrain` (E4). The single-seed gate ran at 10k/agent, so its
+    numbers are NOT comparable to these - see E4b in notes/design_space.md for
+    the same trap costing a comparison before.
+    """
+    cells = [
+        ("legacy", ["--legacy-actions", "--no-agent-id-obs"]),
+        ("gated_noid", ["--no-agent-id-obs"]),
+        ("gated_id", []),
+    ]
+    jobs = []
+    for s in GATE_SEEDS:
+        for name, flags in cells:
+            jobs.append(job(f"{name}/seed{s}", flags + ["--seed", s],
+                            n_agents=2, timesteps=50_000 * 2))
+    return jobs
+
+
 SUITES = {"smoke": suite_smoke, "cheap": suite_cheap,
-          "grid": suite_grid, "retrain": suite_retrain}
+          "grid": suite_grid, "retrain": suite_retrain,
+          "gate": suite_gate}
 
 
 def main():
