@@ -9,6 +9,7 @@ Suites:
   smoke  1 short run - proves the pipeline works on a new machine
   cheap  the four high-value cheap experiments (see notes/design_space.md)
   grid   the 2D spine: informed fraction x number of market makers
+  retrain  the May-2026 PPO ablation, re-run on post-E3 code (acts 3-4)
 """
 import argparse
 import os
@@ -128,7 +129,61 @@ def suite_grid():
     return jobs
 
 
-SUITES = {"smoke": suite_smoke, "cheap": suite_cheap, "grid": suite_grid}
+def suite_retrain():
+    """The May-2026 PPO experiments, re-run on fixed code.
+
+    Every number in notes/experiments_results.md was produced before 808a6c0,
+    with VecNormalize(norm_reward=True) on top of SuperSuit's uint8 dones - E3.
+    Those policies learned against a corrupted reward scale, so re-evaluating
+    the checkpoints only reproduces the bug faithfully. They need retraining.
+    Presentation acts 3-4 rest on them.
+
+    Two cells here have no VecNormalize at all, so E3 could not have touched
+    them; they are included anyway because the whole point of the 2x2 is that
+    the four cells differ in exactly one thing each, which stops being true if
+    two of them were trained on different code from the other two.
+
+    Budget is 50k env steps PER AGENT, matching the grid (E4). The May runs and
+    the cheap suite both got 25k/agent from a flat 50_000 at n_agents=2, so
+    these numbers are NOT comparable to either - which is why the two cells
+    that duplicate cheap (exp1 == norm_obs_off, vecnorm_only == invpen_default)
+    are re-run here rather than borrowed.
+
+    Cells, and what each one is for in the talk:
+      noop          act 3 - default inv penalty, no VecNormalize. The refusal:
+                    raw ~1e7 rewards, value_loss ~1e11, approx_kl ~1e-5, policy
+                    frozen at init. 0 fills, $0.
+      invpen0_only  act 4 - removing the inventory penalty alone changes
+                    nothing; it collapses to the same noop.
+      vecnorm_only  act 4 - fix the reward scale and keep the default penalty.
+                    Was the best PPO result of May (+$117 / +$113).
+      exp1          act 4 - fix the scale, drop the penalty. Trades and loses.
+      min_size_10   act 4 - force a minimum size and the agent routes around it
+                    by quoting ~50c off mid (7 fills vs 1181). The talk's
+                    specification-gaming beat.
+      both_hatches  act 4 close - clamp the offset as well, and it finally
+                    quotes. Budget-matched to min_size_10 on purpose: the
+                    hatch-closing contrast is void if the two differ in
+                    training steps as well as in constraints.
+    """
+    cells = [
+        ("noop", ["--no-vecnormalize", "--inventory-penalty", 1e-4]),
+        ("invpen0_only", ["--no-vecnormalize", "--inventory-penalty", 0.0]),
+        ("vecnorm_only", ["--inventory-penalty", 1e-4]),
+        ("exp1", ["--inventory-penalty", 0.0]),
+        ("min_size_10", ["--min-size", 10]),
+        ("both_hatches", ["--min-size", 10, "--max-offset-cents", 5]),
+    ]
+    jobs = []
+    for s in SEEDS:
+        for name, flags in cells:
+            jobs.append(job(f"{name}/seed{s}", flags + ["--seed", s],
+                            n_agents=2, timesteps=50_000 * 2))
+    return jobs
+
+
+SUITES = {"smoke": suite_smoke, "cheap": suite_cheap,
+          "grid": suite_grid, "retrain": suite_retrain}
 
 
 def main():

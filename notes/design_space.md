@@ -267,6 +267,23 @@ in the competitive cells were four times less trained than the solo baseline,
 along the exact axis the grid varies. Prediction 2 ("more competitors → less
 profit each") could not have been separated from "less training".
 
+**E4b — the fix landed in `suite_grid` only; `suite_cheap` still runs at
+25k/agent.** *(noticed 2026-09-04, macmini; not yet acted on.)*
+
+`job()` defaults to `timesteps=50_000` and `suite_cheap` takes that default at
+`n_agents=2`, so every cheap cell trained on 25,088 env steps per agent while
+every grid cell trained on ~50,176. This is **not** a confound inside the cheap
+suite — `n_agents` is constant at 2 there, so `norm_obs` vs `norm_obs_off` vs
+`both_hatches` vs `invpen_default` are all budget-matched to each other, and
+the E1 outcome above stands. What it does mean is that **cheap numbers must not
+be compared against grid numbers**, and that the May-2026 runs (also flat
+50_000 at `n_agents=2`, so also 25k/agent) happen to be budget-matched to cheap
+but not to the grid.
+
+Consequence for the retrain below: the two cells that duplicate cheap
+(`exp1` == `norm_obs_off`, `vecnorm_only` == `invpen_default`) are re-run
+rather than borrowed, so the whole act-3/4 ablation sits at one budget.
+
 ---
 
 # Candidate experiments
@@ -286,6 +303,30 @@ Ordered by value per unit effort. Costs assume 3 seeds unless noted.
    PPO checkpoints need **retraining**, not re-evaluation. Only re-*evaluation*
    is sufficient for the `norm_obs` arm, whose training was correct and whose
    `vecnormalize.pkl` survives.
+
+   **The retrain is specified as `experiments/run.sh retrain`** (added
+   2026-09-04, `suite_retrain` in `matrix.py`): six cells x 3 seeds = 18 runs
+   at 50k env steps per agent, matching the grid.
+
+   | cell | flags | what act 3-4 needs it for |
+   |---|---|---|
+   | `noop` | `--no-vecnormalize --inventory-penalty 1e-4` | the refusal: 0 fills, $0 |
+   | `invpen0_only` | `--no-vecnormalize --inventory-penalty 0.0` | penalty removal alone is a noop |
+   | `vecnorm_only` | `--inventory-penalty 1e-4` | May's best PPO cell (+$117 / +$113) |
+   | `exp1` | `--inventory-penalty 0.0` | fix the scale, it trades and loses |
+   | `min_size_10` | `--min-size 10` | routed around by quoting ~50c off mid |
+   | `both_hatches` | `--min-size 10 --max-offset-cents 5` | the hatch-closing close |
+
+   `noop` and `invpen0_only` never wrapped `VecNormalize`, so E3 could not have
+   reached them and their May numbers are probably still sound. They are in the
+   suite anyway: the 2x2 only reads as a 2x2 if all four cells come off the same
+   code. `both_hatches` is re-run for the same reason - the
+   `min_size_10` -> `both_hatches` contrast is void if the two cells differ in
+   training budget as well as in constraints.
+
+   Cost: ~15-18 min/run on macmini (4-core, 5.5 core-hours total, and it shares
+   the box with the media stack), far less on the desktop. **Deferred to the
+   desktop by Pavel, 2026-09-04** rather than run here.
 2. **`norm_obs=True`** (E1, restated above). One flag, 3 seeds ≈ 35 min.
 3. **Close both hatches** — `min_size=10` **and** `max_offset_cents` clamped.
    3 seeds ≈ 35 min. Three possible outcomes, all publishable: it makes markets;
