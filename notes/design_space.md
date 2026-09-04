@@ -228,6 +228,15 @@ near-constant features have their jitter amplified to full scale, i.e. noise.
 inside the seed variance we already know is large, making the honest reading at
 3 seeds "this experiment can't tell us".
 
+**Outcome (2026-08-31, corrected evals).** Prediction held. norm_obs mean
+−1069 vs norm_obs_off −686; effect −383 against pooled seed sd 601, i.e.
+**0.64× the noise**. Note these numbers required `fc0e970`: the first run
+evaluated norm_obs policies on raw observations, and those numbers were
+meaningless. The control is clean — norm_obs_off re-evaluated bit-identical.
+Also measured: `--norm-obs` sharply *increases* seed variance (sd ~985 vs ~80),
+which is the "amplify near-constant features into noise" risk in this section
+showing up in data.
+
 **E2 — ~~`MarlChild` doesn't log fills~~ fixed 2026-08-30.**
 The diagnosis was slightly off: fills always reached the `Trajectory` (via the
 `traj_row` contract, and `eval.py` even printed the count) — `np.savez` just
@@ -299,6 +308,37 @@ Ordered by value per unit effort. Costs assume 3 seeds unless noted.
      fraction as `n_agents` rises
    Requires: wiring `--n-agents` and the population kwargs into `train.py`
    (~20 lines) and a smoke test at `n_agents != 2`, which nothing currently covers.
+
+   **Outcome (2026-09-04) — see `notes/grid_results.md` for the full writeup.**
+   Run at **65 seeds/cell**, not 3: 780 runs, zero failures, on code with E3
+   and E4 fixed. **All three predictions unsupported**, and the reason is
+   common to all of them: *the agent never made markets*.
+
+   - Δequity contrast n=4 − n=1 = **−88, SE 238, t = −0.37** (pooled 65 seeds:
+     +36, 95% CI [−355, +426]). Bounded near zero, not merely unmeasured.
+   - Quoting was tested for the first time and is also flat: quoted spread
+     0.50 / 0.54 / 0.54¢ and fills 612 / 663 / 659 for n = 1 / 2 / 4, all null.
+   - Spread capture is **under 1% of |P&L|** at every cell (~8¢ against ~−900
+     of adverse selection). The P&L is inventory mark-to-market, not liquidity
+     provision.
+   - The policy posts a genuine two-sided market on **~2% of decision steps**.
+     Sub-tick offsets round to zero and cross (~60% of steps); sizes average
+     0.3 against `max_size=100` and round to zero (~62%).
+
+   So the grid could not test competition: the treatment was never applied.
+   This is a *broken* refusal rather than a correct one — not an agent
+   declining to quote because adverse selection makes it unprofitable, but a
+   policy in a degenerate optimum that never learned to quote. Fixing it means
+   removing the degenerate region from the action space (minimum tick offset
+   and minimum size, i.e. the `both_hatches` configuration, which is the one
+   setting measured so far that produced real quoting) and re-running the grid
+   on top of that.
+
+   Sample size caveat worth carrying into any future design: at 3 seeds the
+   cells were unresolvable (signal/noise 0.73), and at 15 seeds the contrast
+   read **+448, t = 1.31** — a trend in the *opposite* direction to the
+   prediction, which reversed sign by 50 seeds. Anything claimed off 3 seeds
+   here would have been an artifact.
 
 ### Newly visible, worth considering for the spine
 6. **`val_lambda_a` as the x-axis** instead of `num_value_agents` — continuous,
