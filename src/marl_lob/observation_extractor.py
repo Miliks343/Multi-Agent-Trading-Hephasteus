@@ -16,7 +16,25 @@ K .. 2K-1   Bid sizes   (top K levels), normalised by max_size
 4K+1        Cash        (cents),         normalised by starting_cash
 4K+2        Spread      (cents / mid),   dimensionless
 4K+3        Time-to-close (seconds),     normalised by session_duration_s
-4K+4 ..     Agent identity one-hot, width `agent_id_width` (0 = omitted)
+4K+4        Order-flow imbalance, last step   (optional, `include_ofi`), tanh
+4K+5        Order-flow imbalance, EWMA        (optional, `include_ofi`), tanh
+4K+4/6 ..   Agent identity one-hot, width `agent_id_width` (0 = omitted)
+
+Why order-flow imbalance
+────────────────────────
+Everything else here is a *snapshot*. The agent sees the book as it stands and
+has no memory, so it cannot see the book *change* - and adverse selection is a
+statement about flow, not about levels. Order-flow imbalance is the single
+most-cited predictive feature in microstructure and it was absent, which meant
+"the agent does not widen its spread against informed flow" (grid2, P1) was a
+claim about the observation rather than about market making: an agent with no
+signal for adverse selection cannot condition on it, and would look exactly
+like one that has decided not to.
+
+OFI follows Cont, Kukanov & Stoikov (2014), on L1, between consecutive
+snapshots. Positive means net buying pressure. Because it is a difference it
+needs the previous book, which the caller owns - `extract_obs` stays pure and
+takes the already-computed values.
 ─────────────────────────────────────────────────────────────────────────────
 
 Why the identity one-hot exists
@@ -48,6 +66,8 @@ Units / conventions inherited from ABIDES
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 
@@ -64,6 +84,10 @@ DEFAULT_K            = 10        # number of price levels each side
 DEFAULT_MAX_INVENTORY = 1_000    # shares  — used for normalisation
 DEFAULT_MAX_SIZE      = 1_000    # shares  — used for normalising queue sizes
 DEFAULT_STARTING_CASH = 10_000_000  # cents ($100 000)
+# EWMA smoothing for the OFI channel. At the default 1s wake-up this is a
+# half-life of ~13.5s, long enough to carry a persistent flow signal through
+# the step-to-step noise and short enough to still be a *current* reading.
+DEFAULT_OFI_ALPHA    = 0.05
 NS_PER_SECOND         = 1_000_000_000
 
 
@@ -71,13 +95,105 @@ NS_PER_SECOND         = 1_000_000_000
 # Public API
 # ──────────────────────────────────────────────────────────────────────────────
 
-def obs_vector_size(k: int = DEFAULT_K, agent_id_width: int = 0) -> int:
+# Two features: last-step OFI and its EWMA.
+OFI_FEATURES = 2
+
+
+def obs_vector_size(
+    k: int = DEFAULT_K,
+    agent_id_width: int = 0,
+    include_ofi: bool = False,
+) -> int:
     """Returns the length of the observation vector.
 
     ``agent_id_width`` is the width of the trailing identity one-hot; 0 omits
-    it entirely, which is the pre-2026-09 layout.
+    it entirely, which is the pre-2026-09 layout. ``include_ofi`` adds the two
+    order-flow features ahead of that one-hot.
     """
-    return 4 * k + 4 + max(int(agent_id_width), 0)
+    return (4 * k + 4
+            + (OFI_FEATURES if include_ofi else 0)
+            + max(int(agent_id_width), 0))
+
+
+def compute_ofi(
+    prev_bids: PriceLevels,
+    prev_asks: PriceLevels,
+    bids: PriceLevels,
+    asks: PriceLevels,
+) -> float:
+    """L1 order-flow imbalance between two book snapshots, in shares.
+
+    Cont, Kukanov & Stoikov (2014):
+
+        e = 1(Pb_n >= Pb_p)*qb_n - 1(Pb_n <= Pb_p)*qb_p
+          - 1(Pa_n <= Pa_p)*qa_n + 1(Pa_n >= Pa_p)*qa_p
+
+    Read it side by side. On the bid, a price that rose or held *adds* the new
+    queue (buy interest arriving) and a price that fell or held *removes* the
+    old one (buy interest leaving); when the price is unchanged both fire and
+    the term collapses to the change in queue size. The ask mirrors it with the
+    sign flipped, since an ask improving means its price *falls*.
+
+    Positive is net buying pressure. Returns 0.0 whenever either book is
+    one-sided or empty in either snapshot - there is no flow to infer.
+    """
+    if not (prev_bids and prev_asks and bids and asks):
+        return 0.0
+
+    pb_p, qb_p = prev_bids[0]
+    pa_p, qa_p = prev_asks[0]
+    pb_n, qb_n = bids[0]
+    pa_n, qa_n = asks[0]
+
+    e = 0.0
+    if pb_n >= pb_p:
+        e += qb_n
+    if pb_n <= pb_p:
+        e -= qb_p
+    if pa_n <= pa_p:
+        e -= qa_n
+    if pa_n >= pa_p:
+        e += qa_p
+    return float(e)
+
+
+# Reference for the EWMA channel's asinh compression: asinh(50) ~ 4.6, chosen
+# so a measured p95 EWMA lands near 0.9 rather than saturating.
+OFI_EWMA_ASINH_REF = math.asinh(50.0)
+
+
+def squash_ofi(ofi: float, max_size: int) -> float:
+    """Compress a raw single-step OFI into [-1, 1].
+
+    Measured over a 900-step rollout, |OFI| has median 40, p75 69, p95 140 -
+    and then p99 49,240 with a max near 100,000. tanh at a scale of `max_size`
+    keeps full resolution across that common range (p50 -> 0.38, p95 -> 0.89)
+    while treating the rare enormous prints as one saturating signal. Measured
+    saturation: 1.8% of steps, against 12.3% for the linear clip it replaced.
+    """
+    return float(np.tanh(float(ofi) / max(int(max_size), 1)))
+
+
+def squash_ofi_ewma(ofi_ewma: float, max_size: int) -> float:
+    """Compress the smoothed OFI channel into [-1, 1].
+
+    The EWMA needs a *different* transform from the raw channel, which is not
+    obvious and was got wrong first time. The theoretical shrinkage for an
+    EWMA of an i.i.d. zero-mean series is sqrt(a/(2-a)) = 0.16, so the smoothed
+    channel was initially scaled down by that. Measurement says the opposite:
+    the EWMA's median is **3.7x larger** than the raw median, because OFI is
+    fat-tailed and autocorrelated - a single 100,000-share print contributes
+    ~5,000 to the EWMA and then decays over a ~13.5s half-life, so the smoothed
+    series sits persistently high while the median raw step stays small. The
+    i.i.d. finite-variance assumption simply does not hold here.
+
+    It also spans a much wider range than the raw channel (p50 148, p90 2,299,
+    max 5,350), so tanh either crushes the low end or saturates the high one -
+    at its best scale it still saturated 12% of steps. asinh compresses that
+    logarithmically instead: p50 -> 0.26, p75 -> 0.65, p90 -> 0.83, p95 -> 0.90.
+    """
+    x = float(ofi_ewma) / max(int(max_size), 1)
+    return float(np.clip(math.asinh(x) / OFI_EWMA_ASINH_REF, -1.0, 1.0))
 
 
 def extract_obs(
@@ -94,6 +210,9 @@ def extract_obs(
     starting_cash: int = DEFAULT_STARTING_CASH,
     agent_index: int | None = None,
     agent_id_width: int = 0,
+    ofi: float | None = None,
+    ofi_ewma: float | None = None,
+    ofi_alpha: float = DEFAULT_OFI_ALPHA,
 ) -> np.ndarray:
     """
     Convert ABIDES book state + agent state → 1D float32 numpy array.
@@ -110,6 +229,13 @@ def extract_obs(
     agent_index : which agent this observation is for; sets the hot element of
         the identity one-hot. Ignored when ``agent_id_width`` is 0.
     agent_id_width : width of the trailing identity one-hot (0 = omitted)
+    ofi, ofi_ewma : order-flow imbalance in shares, last step and smoothed.
+        Pass both to include the two OFI features; pass neither to omit them.
+        They are a property of the market, not of the agent, so the caller
+        computes them once per wake-up via ``compute_ofi`` and shares them.
+    ofi_alpha : the EWMA smoothing the caller used. Recorded for provenance;
+        the smoothed channel's compression is fixed by measurement, not by
+        this value (see squash_ofi_ewma)
 
     Returns
     -------
@@ -153,6 +279,15 @@ def extract_obs(
         [inv_norm, cash_norm, spread_norm, ttc_norm],
     ]
 
+    if ofi is not None or ofi_ewma is not None:
+        # The two channels are squashed differently, and deliberately so -
+        # see squash_ofi / squash_ofi_ewma. Both are monotone, so ordering
+        # survives into the tail.
+        parts.append([
+            squash_ofi(ofi or 0.0, max_size),
+            squash_ofi_ewma(ofi_ewma or 0.0, max_size),
+        ])
+
     width = max(int(agent_id_width), 0)
     if width:
         one_hot = np.zeros(width, dtype=np.float64)
@@ -166,7 +301,11 @@ def extract_obs(
     return np.clip(obs, -1.0, 1.0)
 
 
-def describe_obs(k: int = DEFAULT_K, agent_id_width: int = 0) -> List[str]:
+def describe_obs(
+    k: int = DEFAULT_K,
+    agent_id_width: int = 0,
+    include_ofi: bool = False,
+) -> List[str]:
     """
     Returns a list of human-readable feature names in the same order as
     extract_obs(). Useful for debugging and documentation.
@@ -181,6 +320,8 @@ def describe_obs(k: int = DEFAULT_K, agent_id_width: int = 0) -> List[str]:
     for i in range(k):
         names.append(f"ask_size_L{i+1}_norm")
     names += ["inventory_norm", "cash_norm", "spread_norm", "time_to_close_norm"]
+    if include_ofi:
+        names += ["ofi_norm", "ofi_ewma_norm"]
     names += [f"agent_id_{i}" for i in range(max(int(agent_id_width), 0))]
     return names
 

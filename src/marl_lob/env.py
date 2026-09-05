@@ -29,6 +29,7 @@ from .marl_agents import MarlChild, MarlCoordinator
 from .actions import DEFAULT_MIN_OFFSET_TICKS, DEFAULT_MIN_QUOTE_SIZE
 from .observation_extractor import (
     DEFAULT_K,
+    DEFAULT_OFI_ALPHA,
     DEFAULT_MAX_INVENTORY,
     DEFAULT_MAX_SIZE,
     DEFAULT_STARTING_CASH,
@@ -88,6 +89,8 @@ class MarlLobEnv(ParallelEnv):
         min_quote_size: int = DEFAULT_MIN_QUOTE_SIZE,
         agent_id_obs: bool = True,
         agent_id_width: Optional[int] = None,
+        include_ofi: bool = False,
+        ofi_alpha: float = DEFAULT_OFI_ALPHA,
         config_kwargs: Optional[dict[str, Any]] = None,
     ) -> None:
         self.n_agents = n_agents
@@ -107,6 +110,8 @@ class MarlLobEnv(ParallelEnv):
             (n_agents if agent_id_width is None else int(agent_id_width))
             if agent_id_obs else 0
         )
+        self.include_ofi = include_ofi
+        self.ofi_alpha = ofi_alpha
         self.symbol = symbol
         self.historical_date = historical_date
         self.start_time = start_time
@@ -120,7 +125,7 @@ class MarlLobEnv(ParallelEnv):
         self.agents: list[str] = []
         self.render_mode = None  # required by SuperSuit's MarkovVectorEnv
 
-        obs_dim = obs_vector_size(k, self.agent_id_width)
+        obs_dim = obs_vector_size(k, self.agent_id_width, self.include_ofi)
         self._obs_space = spaces.Box(
             low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32
         )
@@ -226,6 +231,8 @@ class MarlLobEnv(ParallelEnv):
             max_inventory=self.max_inventory,
             max_size=self.max_size,
             agent_id_width=self.agent_id_width,
+            include_ofi=self.include_ofi,
+            ofi_alpha=self.ofi_alpha,
             wakeup_interval_generator=ConstantTimeGenerator(
                 step_duration=wakeup_ns
             ),

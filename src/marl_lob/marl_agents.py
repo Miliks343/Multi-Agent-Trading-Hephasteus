@@ -24,6 +24,8 @@ from .actions import (
 from .agent_adapter import dispatch_intents, project_resting_orders
 from .observation_extractor import (
     DEFAULT_K,
+    DEFAULT_OFI_ALPHA,
+    compute_ofi,
     DEFAULT_MAX_INVENTORY,
     DEFAULT_MAX_SIZE,
     DEFAULT_STARTING_CASH,
@@ -117,6 +119,9 @@ def build_per_agent_state(
     max_inventory: int = DEFAULT_MAX_INVENTORY,
     max_size: int = DEFAULT_MAX_SIZE,
     agent_id_width: int = 0,
+    ofi: float | None = None,
+    ofi_ewma: float | None = None,
+    ofi_alpha: float = DEFAULT_OFI_ALPHA,
 ) -> list[dict[str, Any]]:
     """Build the per-agent payload the env consumes.
 
@@ -151,6 +156,9 @@ def build_per_agent_state(
             starting_cash=starting_cash,
             agent_index=agent_index,
             agent_id_width=agent_id_width,
+            ofi=ofi,
+            ofi_ewma=ofi_ewma,
+            ofi_alpha=ofi_alpha,
         )
         fill_qty, fill_px = _aggregate_fills(snap.fills)
         out.append({
@@ -289,6 +297,8 @@ class MarlCoordinator(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
         max_inventory: int = DEFAULT_MAX_INVENTORY,
         max_size: int = DEFAULT_MAX_SIZE,
         agent_id_width: int = 0,
+        include_ofi: bool = False,
+        ofi_alpha: float = DEFAULT_OFI_ALPHA,
         name: Optional[str] = None,
         type: Optional[str] = None,
         random_state=None,
@@ -312,6 +322,14 @@ class MarlCoordinator(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
         self.max_inventory = max_inventory
         self.max_size_norm = max_size
         self.agent_id_width = agent_id_width
+        self.include_ofi = include_ofi
+        self.ofi_alpha = ofi_alpha
+        # Order-flow imbalance is a difference, so the coordinator owns the
+        # previous book and the running EWMA. It is a property of the market,
+        # not of an agent, so it is computed once per wake-up and shared.
+        self._prev_bids: PriceLevels = []
+        self._prev_asks: PriceLevels = []
+        self._ofi_ewma: float = 0.0
         self._starting_cash_norm = starting_cash
 
     def apply_actions(self, actions: list[dict[str, Any]]) -> None:  # pragma: no cover
@@ -334,11 +352,22 @@ class MarlCoordinator(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
         for child in self.children:
             child.inter_wakeup_executed_orders = []
             child.parsed_inter_wakeup_executed_orders = []
+        bids = self.parsed_mkt_data.get("bids", []) or []
+        asks = self.parsed_mkt_data.get("asks", []) or []
+
+        ofi = ofi_ewma = None
+        if self.include_ofi:
+            ofi = compute_ofi(self._prev_bids, self._prev_asks, bids, asks)
+            self._ofi_ewma = (self.ofi_alpha * ofi
+                              + (1.0 - self.ofi_alpha) * self._ofi_ewma)
+            ofi_ewma = self._ofi_ewma
+        self._prev_bids, self._prev_asks = bids, asks
+
         return {
             "per_agent": build_per_agent_state(
                 snaps,
-                known_bids=self.parsed_mkt_data.get("bids", []) or [],
-                known_asks=self.parsed_mkt_data.get("asks", []) or [],
+                known_bids=bids,
+                known_asks=asks,
                 current_time_ns=int(self.current_time),
                 mkt_open_ns=self.mkt_open_ns,
                 mkt_close_ns=self.mkt_close_ns,
@@ -347,6 +376,9 @@ class MarlCoordinator(CoreBackgroundAgent):  # type: ignore[misc, valid-type]
                 max_inventory=self.max_inventory,
                 max_size=self.max_size_norm,
                 agent_id_width=self.agent_id_width,
+                ofi=ofi,
+                ofi_ewma=ofi_ewma,
+                ofi_alpha=self.ofi_alpha,
             ),
             "timestamp_s": (int(self.current_time) - self.mkt_open_ns) / 1e9,
         }

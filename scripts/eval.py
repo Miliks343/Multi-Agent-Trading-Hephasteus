@@ -10,6 +10,7 @@ Assumes scripts/run_baseline.py has been run on the same seeds first
 from __future__ import annotations
 
 import argparse
+import json
 import pickle
 import warnings
 from pathlib import Path
@@ -167,15 +168,47 @@ def main():
     # the caller having to remember which is which - and a mismatch raises
     # here instead of silently feeding the policy the wrong contract.
     gated = int(np.prod(model.action_space.shape)) == 6
-    agent_id_width = int(np.prod(model.observation_space.shape)) - obs_vector_size()
-    if agent_id_width < 0:
+    obs_width = int(np.prod(model.observation_space.shape))
+
+    # The observation has two optional blocks - the OFI features and the
+    # identity one-hot - so its width alone no longer determines the layout:
+    # one equation, two unknowns. train.py records every argument in
+    # run_meta.json next to the checkpoint, so read it when it is there and
+    # fall back to inference for runs that predate a given flag.
+    meta_path = args.checkpoint.parent / "run_meta.json"
+    include_ofi, agent_id_width, source = None, None, "inferred"
+    if meta_path.is_file():
+        try:
+            margs = json.loads(meta_path.read_text()).get("args", {})
+            include_ofi = bool(margs.get("ofi", False))
+            if margs.get("agent_id_width") is not None:
+                agent_id_width = int(margs["agent_id_width"])
+            elif not margs.get("no_agent_id_obs", False):
+                agent_id_width = int(margs.get("n_agents", args.n_agents))
+            else:
+                agent_id_width = 0
+            source = f"run_meta.json ({meta_path})"
+        except (ValueError, KeyError, TypeError) as exc:
+            print(f"warning: could not read {meta_path} ({exc}); inferring")
+            include_ofi, agent_id_width = None, None
+
+    if agent_id_width is None:
+        include_ofi = False
+        agent_id_width = obs_width - obs_vector_size()
+
+    expected = obs_vector_size(agent_id_width=agent_id_width,
+                               include_ofi=bool(include_ofi))
+    if expected != obs_width:
         raise SystemExit(
-            f"checkpoint observation width "
-            f"{int(np.prod(model.observation_space.shape))} is smaller than the "
-            f"{obs_vector_size()}-dim base layout; k must differ from the default"
+            f"observation layout mismatch: checkpoint is {obs_width}-dim but "
+            f"the layout {source} implies {expected} "
+            f"(include_ofi={include_ofi}, agent_id_width={agent_id_width}). "
+            f"Refusing to evaluate a policy against the wrong contract."
         )
+
     print(f"action layout: {'gated 6-tuple' if gated else 'legacy 4-tuple'}; "
-          f"agent-id width: {agent_id_width}")
+          f"agent-id width: {agent_id_width}; ofi: {bool(include_ofi)} "
+          f"[{source}]")
 
     for seed in args.seeds:
         env = MarlLobEnv(
@@ -184,6 +217,7 @@ def main():
             gated_actions=gated,
             agent_id_obs=agent_id_width > 0,
             agent_id_width=agent_id_width,
+            include_ofi=bool(include_ofi),
         )
         rollouts = rollout_ppo(env, model, seed, args.max_steps, normalize)
         env.close()
@@ -220,6 +254,7 @@ def main():
                 # side by side in the same runs/ tree.
                 gated=np.array(int(gated)),
                 agent_id_width=np.array(agent_id_width),
+                include_ofi=np.array(int(bool(include_ofi))),
                 n_agents=np.array(int(args.n_agents)),
             )
 

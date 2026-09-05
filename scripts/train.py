@@ -74,6 +74,7 @@ def make_env(
     min_quote_size: int = DEFAULT_MIN_QUOTE_SIZE,
     agent_id_obs: bool = True,
     agent_id_width: int | None = None,
+    include_ofi: bool = False,
     config_kwargs: dict | None = None,
 ):
     env = MarlLobEnv(
@@ -87,6 +88,7 @@ def make_env(
         min_quote_size=min_quote_size,
         agent_id_obs=agent_id_obs,
         agent_id_width=agent_id_width,
+        include_ofi=include_ofi,
         config_kwargs=config_kwargs,
     )
     env = ss.pettingzoo_env_to_vec_env_v1(env)
@@ -173,6 +175,15 @@ def main():
                         help="pin the identity one-hot width (default: "
                              "n_agents). Pin it across a grid that varies "
                              "n_agents so every cell shares one obs width.")
+    parser.add_argument("--ofi", action="store_true",
+                        help="add two order-flow-imbalance features to the "
+                             "observation: last-step OFI and its EWMA. "
+                             "Everything else in the observation is a snapshot, "
+                             "so without this the agent cannot see the book "
+                             "CHANGE - and adverse selection is a statement "
+                             "about flow. grid2's P1 (no widening against "
+                             "informed flow) may be a fact about this gap "
+                             "rather than about market making.")
     parser.add_argument("--norm-obs", action="store_true",
                         help="normalise observations in VecNormalize. OFF by "
                              "default to match the May runs, but observations "
@@ -206,6 +217,7 @@ def main():
         min_quote_size=args.min_quote_size,
         agent_id_obs=not args.no_agent_id_obs,
         agent_id_width=args.agent_id_width,
+        include_ofi=args.ofi,
         n_agents=args.n_agents,
         inventory_penalty=args.inventory_penalty,
         vecnormalize=not args.no_vecnormalize,
