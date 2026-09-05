@@ -3,7 +3,7 @@
 **Keep this file current.** It is the thing a fresh session should read first.
 Everything else in `notes/` is a record of a moment; this is the running state.
 
-Last updated: 2026-09-05 (grid2 complete).
+Last updated: 2026-09-05 (OFI suite running).
 
 ## The one-line summary
 
@@ -103,6 +103,32 @@ observation, not about market making. P3 does not depend on it.
 0.012) on spread effects of −0.026c and −0.002c *in the wrong direction*,
 because the metric is pinned against a floor. Report effect sizes beside
 p-values.
+
+## Running now — the OFI suite
+
+Launched 2026-09-05 11:37 EEST on the desktop, `setsid nohup
+experiments/run.sh ofi -j 6 > /tmp/ofi.log`. **160 runs** (4 informed-flow
+levels x OFI on/off x 20 seeds), n_agents=1, ~2-3 hours. Predictions
+pre-registered in `notes/ofi_preregistration.md` before the first job.
+
+**What it closes.** grid2's P1 (no widening against informed flow) could not
+have come out any other way: the observation is entirely a snapshot, so the
+agent never sees the book *change*, and adverse selection is a statement about
+flow. `--ofi` adds last-step order-flow imbalance and its EWMA (Cont, Kukanov &
+Stoikov 2014 on L1). The claim under test is the **interaction** — OFI must
+change how the agent responds to informed flow, not merely shift its behaviour
+— so the `ofi_off` arm is a control that must reproduce grid2's null.
+
+**Pick it up with:**
+
+    ssh pavel@100.92.153.77
+    grep -E 'suite ofi finished|NOTE:|FAIL' /tmp/ofi.log
+    cd ~/marl-lob && .work/venv/bin/python scripts/quote_stats.py ofi
+
+Analysis is a difference-in-differences paired by training seed; plan and
+falsification conditions are in the pre-registration. **Feature-health gate:**
+if the two OFI channels are not moving in the saved observations of the
+`ofi_on` arm, that arm did not receive its treatment and its result is void.
 
 ## Superseded — the old blocker on re-running the grid
 
