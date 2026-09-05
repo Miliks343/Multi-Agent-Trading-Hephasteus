@@ -189,3 +189,33 @@ def test_pettingzoo_parallel_api_conformance():
     e = MarlLobEnv(n_agents=2)
     parallel_api_test(e, num_cycles=50)
     e.close()
+
+
+def test_background_logging_is_off_by_default():
+    """rmsc03 enables order and book logging for every background agent, and
+    nothing here reads any of it - observations come from the market-data
+    subscription and metrics from traj_row. Leaving it on cost ~26% of wall
+    time at full episode length (see configs/rmsc03_simple.py)."""
+    from marl_lob.configs import rmsc03_simple
+    captured = {}
+
+    class _Stub:
+        @staticmethod
+        def build_config(**kw):
+            captured.update(kw)
+            return {"agents": []}
+
+    real = rmsc03_simple.rmsc03
+    rmsc03_simple.rmsc03 = _Stub
+    try:
+        rmsc03_simple.build_config()
+        assert captured["exchange_log_orders"] is False
+        assert captured["log_orders"] is False
+        assert captured["book_logging"] is False
+
+        captured.clear()
+        rmsc03_simple.build_config(log_orders=True, book_logging=True)
+        assert captured["log_orders"] is True, "must stay overridable"
+        assert captured["book_logging"] is True
+    finally:
+        rmsc03_simple.rmsc03 = real

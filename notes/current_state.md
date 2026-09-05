@@ -154,3 +154,12 @@ act; the seed-count reversal is a methods footnote, not an act.
   and the default collapsed to `-j 1`.
 - `scripts/quote_stats.py <suite>` answers "was it actually making markets",
   which Δequity does not.
+- **Performance, measured 2026-09-05.** A GPU does not help and would hurt: the
+  policy is a 15,053-parameter MLP and accounts for **4.8% of a stepping loop**
+  (ABIDES ~95.2%), so the ceiling on making the policy infinitely fast is
+  1.05x — and per-call kernel launch overhead on a batch of two observations
+  exceeds the CPU compute. `--device cpu` is already the default and is right.
+  What *did* help: turning off rmsc03's background order/book logging, which
+  nothing here reads — **1.35x at full episode length, verified bit-identical**
+  (`src/marl_lob/configs/rmsc03_simple.py`). The remaining lever is more cores
+  running more sims concurrently, not faster single runs.
