@@ -62,6 +62,7 @@ GRID_SEEDS = _seed_spec("MARL_GRID_SEEDS", range(15))
 # informed flow resolves at 20 seeds, and a +-5pp wobble would not resolve at
 # 50 either. Override with MARL_GRID2_SEEDS.
 GRID2_SEEDS = _seed_spec("MARL_GRID2_SEEDS", range(20))
+OFI_SEEDS = _seed_spec("MARL_OFI_SEEDS", range(20))
 
 # Eval seeds are cheap (~30s each, no training) and a single one leaves every
 # number in the writeup resting on one sampled market. Three is the difference
@@ -292,9 +293,58 @@ def suite_grid2():
     return jobs
 
 
+def suite_ofi():
+    """Can the agent respond to informed flow once it can SEE flow?
+
+    grid2's P1 - withdrawal rises with informed flow - was unsupported, and its
+    P2 - spread widens - was unsupported with a degenerate dependent variable
+    (the policy sat pinned at the 2c floor at all twelve cells). But the
+    observation could not have supported either. It is entirely a snapshot: the
+    book as it stands, plus inventory, cash, spread and time. Adverse selection
+    is a statement about *flow*, and an agent with no flow signal cannot
+    condition on it - it would look exactly like this whether or not the effect
+    is real. So P1's failure is currently a fact about our observation.
+
+    This is the direct test: the same informed-flow sweep, with and without the
+    two OFI features, `n_agents=1` so competition cannot confound it (grid2
+    showed competition does nothing anyway, and n=1 halves the cost).
+    `agent_id_width` stays pinned at 4 so these cells remain directly
+    comparable to grid2's v*_n1 cells.
+
+    PREDICTIONS, committed before running:
+      1. WITHOUT OFI, withdrawal stays flat across informed flow - reproducing
+         grid2's P1 null on n=1 cells. This is the control, and if it fails the
+         comparison is void.
+      2. WITH OFI, withdrawal RISES with informed flow. This is the real test.
+      3. WITH OFI, quoted spread rises above the 2c floor at high informed
+         flow. The floor binds at 2c, so the only direction it can move is up,
+         and grid2 showed the raw pre-quantisation offsets sitting at 0.18-0.29c
+         - the policy was not trying to widen at all.
+      4. Delta-equity stays negative everywhere. Seeing informed flow is not
+         the same as being able to profit despite it, and nothing here gives
+         the agent an edge - that is the latency experiment, next.
+
+    Falsification: prediction 2 fails if the v400 - v10 withdrawal contrast
+    with OFI is within noise, or is no larger than the same contrast without.
+    The interaction is the claim, not the main effect.
+    """
+    jobs = []
+    for s in OFI_SEEDS:
+        for value_agents in (10, 50, 150, 400):
+            for tag, flags in (("ofi_off", []), ("ofi_on", ["--ofi"])):
+                jobs.append(job(
+                    f"v{value_agents}_{tag}/seed{s}",
+                    ["--num-value-agents", value_agents,
+                     "--agent-id-width", 4, "--seed", s] + flags,
+                    n_agents=1,
+                    timesteps=50_000,
+                ))
+    return jobs
+
+
 SUITES = {"smoke": suite_smoke, "cheap": suite_cheap,
           "grid": suite_grid, "retrain": suite_retrain,
-          "gate": suite_gate, "grid2": suite_grid2}
+          "gate": suite_gate, "grid2": suite_grid2, "ofi": suite_ofi}
 
 
 def main():
