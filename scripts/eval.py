@@ -177,10 +177,17 @@ def main():
     # fall back to inference for runs that predate a given flag.
     meta_path = args.checkpoint.parent / "run_meta.json"
     include_ofi, agent_id_width, source = None, None, "inferred"
+    latency_edge = None
     if meta_path.is_file():
         try:
             margs = json.loads(meta_path.read_text()).get("args", {})
             include_ofi = bool(margs.get("ofi", False))
+            # Latency does not change the observation or action shape, so
+            # nothing would have caught a mismatch: the policy would simply be
+            # evaluated at a different latency from the one it trained at, and
+            # under ABIDES' random placement that means a different draw every
+            # eval. It has to come from the run's own metadata.
+            latency_edge = margs.get("latency_edge")
             if margs.get("agent_id_width") is not None:
                 agent_id_width = int(margs["agent_id_width"])
             elif not margs.get("no_agent_id_obs", False):
@@ -207,8 +214,8 @@ def main():
         )
 
     print(f"action layout: {'gated 6-tuple' if gated else 'legacy 4-tuple'}; "
-          f"agent-id width: {agent_id_width}; ofi: {bool(include_ofi)} "
-          f"[{source}]")
+          f"agent-id width: {agent_id_width}; ofi: {bool(include_ofi)}; "
+          f"latency_edge: {latency_edge} [{source}]")
 
     for seed in args.seeds:
         env = MarlLobEnv(
@@ -218,6 +225,7 @@ def main():
             agent_id_obs=agent_id_width > 0,
             agent_id_width=agent_id_width,
             include_ofi=bool(include_ofi),
+            latency_edge=latency_edge,
         )
         rollouts = rollout_ppo(env, model, seed, args.max_steps, normalize)
         env.close()

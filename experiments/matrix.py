@@ -63,6 +63,7 @@ GRID_SEEDS = _seed_spec("MARL_GRID_SEEDS", range(15))
 # 50 either. Override with MARL_GRID2_SEEDS.
 GRID2_SEEDS = _seed_spec("MARL_GRID2_SEEDS", range(20))
 OFI_SEEDS = _seed_spec("MARL_OFI_SEEDS", range(20))
+LATENCY_SEEDS = _seed_spec("MARL_LATENCY_SEEDS", range(20))
 
 # Eval seeds are cheap (~30s each, no training) and a single one leaves every
 # number in the writeup resting on one sampled market. Three is the difference
@@ -342,9 +343,62 @@ def suite_ofi():
     return jobs
 
 
+def suite_latency():
+    """Does a speed edge create a viable region where none exists?
+
+    grid2 found no cell of the informed-flow x competition design profitable,
+    so the question stops being "where is the boundary" and becomes "does an
+    edge create one at all". Speed is the canonical market-maker edge and
+    ABIDES has had it wired in and unused the whole time.
+
+    Run at v50 deliberately: it was the LEAST unprofitable n=1 cell in grid2
+    (-$1,820, against -$2,649 at v10), so it is where viability is closest and
+    an edge has the best chance of mattering.
+
+    **What a latency edge can and cannot buy here, stated before running.** The
+    background median latency to the exchange is 3.2ms and our wake-up interval
+    is 1s. So the edge cannot buy faster *reaction* - we cannot re-quote until
+    our next wake-up regardless. What it buys is **queue priority**: our order
+    reaches the book ahead of a competitor's identical-price order, and our
+    cancel lands sooner. A real HFT speed edge works through microsecond
+    re-quoting, which this cadence cannot express; that is a limitation of the
+    experiment, not a finding, and it belongs in any writeup.
+
+    factor 1.0 is not a no-op - it is a control. Left unset, config_add_agents
+    drops our agents at a random point on ABIDES' Seattle-to-NYC line, so
+    latency has been uncontrolled in every previous run.
+
+    PREDICTIONS, committed before running:
+      1. Fill rate RISES as latency falls. This is the mechanism the cadence
+         permits - queue priority - and if it does not move, the edge was never
+         applied and nothing else here is interpretable.
+      2. Delta-equity does NOT improve, and plausibly gets WORSE. grid2 measured
+         capture at ~1% of |P&L| with everything else adverse selection, so
+         winning more of the same fills means losing more. A speed edge that
+         makes things worse is the interesting outcome and it is the one
+         predicted here.
+      3. No cell becomes profitable. The edge does not create a viable region.
+      4. Quoted spread stays pinned at the 2c floor - nothing here gives the
+         agent a reason to widen.
+    """
+    jobs = []
+    for s in LATENCY_SEEDS:
+        for factor in (0.0, 0.25, 1.0, 4.0):
+            tag = f"lat{str(factor).replace('.', '')}"
+            jobs.append(job(
+                f"{tag}/seed{s}",
+                ["--num-value-agents", 50, "--agent-id-width", 4,
+                 "--latency-edge", factor, "--seed", s],
+                n_agents=1,
+                timesteps=50_000,
+            ))
+    return jobs
+
+
 SUITES = {"smoke": suite_smoke, "cheap": suite_cheap,
           "grid": suite_grid, "retrain": suite_retrain,
-          "gate": suite_gate, "grid2": suite_grid2, "ofi": suite_ofi}
+          "gate": suite_gate, "grid2": suite_grid2, "ofi": suite_ofi,
+          "latency": suite_latency}
 
 
 def main():
