@@ -3,14 +3,15 @@
 **Keep this file current.** It is the thing a fresh session should read first.
 Everything else in `notes/` is a record of a moment; this is the running state.
 
-Last updated: 2026-09-05 (OFI suite running).
+Last updated: 2026-09-05 (OFI done, latency running).
 
 ## The one-line summary
 
-The agent now makes markets, the agents are verifiably distinct, and it still
-loses money at **every** combination of informed flow and competition tested —
-earning ~1% of its P&L from the spread. That is the project's central result
-and it is about the environment, not about PPO. Acts 4 and 7 still need claims.
+The agent now makes markets, the agents are verifiably distinct, it has an
+order-flow signal, and it **still loses at every setting tested** — earning ~1%
+of its P&L from the spread. Three defects have been found and fixed in the same
+place, and the third was found by the experiment meant to rule the action space
+out. Acts 4 and 7 still need claims.
 
 ## What is settled and quotable
 
@@ -104,31 +105,85 @@ observation, not about market making. P3 does not depend on it.
 because the metric is pinned against a floor. Report effect sizes beside
 p-values.
 
-## Running now — the OFI suite
+## OFI — complete 2026-09-05. Null, and the reason matters.
 
-Launched 2026-09-05 11:37 EEST on the desktop, `setsid nohup
-experiments/run.sh ofi -j 6 > /tmp/ofi.log`. **160 runs** (4 informed-flow
-levels x OFI on/off x 20 seeds), n_agents=1, ~2-3 hours. Predictions
-pre-registered in `notes/ofi_preregistration.md` before the first job.
+160 runs, 3h42m, zero failures. Full writeup `notes/ofi_results.md`;
+predictions pre-registered before the first job.
 
-**What it closes.** grid2's P1 (no widening against informed flow) could not
-have come out any other way: the observation is entirely a snapshot, so the
-agent never sees the book *change*, and adverse selection is a statement about
-flow. `--ofi` adds last-step order-flow imbalance and its EWMA (Cont, Kukanov &
-Stoikov 2014 on L1). The claim under test is the **interaction** — OFI must
-change how the agent responds to informed flow, not merely shift its behaviour
-— so the `ofi_off` arm is a control that must reproduce grid2's null.
+- **Feature-health gate passed.** Both OFI channels have std 0.42-0.46 in every
+  cell — the most active features in the observation (`ask_size_L1_norm` is
+  0.34, `spread_norm` 0.0001). The agent had the signal.
+- **Control arm reproduced grid2 exactly** (v400−v10 = −3.83pp, p=0.82), so the
+  comparison is valid.
+- **The interaction is absent.** Difference-in-differences on `withdrawn%`,
+  `spread` and `two-sided%` are all null. Still unprofitable everywhere,
+  capture still ~1% of |P&L|.
+
+**So grid2's P1 null is NOT explained by a missing observation** — that
+loophole in the headline is closed by test rather than argument.
+
+**But a second dead zone is why, and it is the same bug a third time.** Under
+gating a live side resolves as `off_ticks = max(round(raw), 1)`, so **every raw
+offset in [0, 1.5) posts exactly one tick** — identical quote, identical
+reward. Measured: the policy emits raw > 1.5 on **0.06-1.4% of steps**. On ~99%
+of steps changing its offset changes nothing, so there is no gradient toward a
+wider spread and no observation can produce one.
+
+Gating fixed *"cannot quote"* and left *"cannot widen"*. **Do not attribute
+this null to the reward or the optimiser** — that would be the third wrong
+explanation in a row for the same class of defect.
+
+## Running now — the latency suite
+
+Launched 2026-09-05 15:25 EEST, `setsid nohup experiments/run.sh latency -j 6
+> /tmp/latency.log`. **80 runs** (4 latency levels x 20 seeds), n_agents=1,
+v50, ~1.5-2h, ETA ~17:00 EEST. Predictions in
+`notes/latency_preregistration.md`.
+
+Prediction 2 is the interesting one: **a speed edge should make things WORSE**,
+because capture is ~1% of |P&L| and winning more of the same fills means losing
+more. Fills are the manipulation check. Note prediction 4 (spread stays pinned
+at 2c) is now *explained* by the second dead zone rather than merely expected.
+
+Also fixed while wiring it: latency had been an **uncontrolled variable in
+every previous run** — `config_add_agents` regenerates the model and drops our
+agents at a random point on ABIDES' Seattle-to-NYC line, redrawn every seed.
+`--latency-edge 1.0` pins us to the background median (3.2ms), so it is a
+control, not a no-op.
 
 **Pick it up with:**
 
     ssh pavel@100.92.153.77
-    grep -E 'suite ofi finished|NOTE:|FAIL' /tmp/ofi.log
-    cd ~/marl-lob && .work/venv/bin/python scripts/quote_stats.py ofi
+    grep -E 'suite latency finished|NOTE:|FAIL' /tmp/latency.log
+    cd ~/marl-lob && .work/venv/bin/python scripts/quote_stats.py latency
 
-Analysis is a difference-in-differences paired by training seed; plan and
-falsification conditions are in the pre-registration. **Feature-health gate:**
-if the two OFI channels are not moving in the saved observations of the
-`ofi_on` arm, that arm did not receive its treatment and its result is void.
+## Proposed next — the offset rescale (NOT yet decided)
+
+The offset dimension needs what the gate dimension already got. The Box
+declares `[0, 50]` cents but the policy only reaches ~3, so 94% of the declared
+range is unreachable and the reachable part maps onto one tick:
+
+    now:  off_ticks = max(round(raw), 1)      raw in [0,1.5) all give 1 tick
+    fix:  off_ticks = 1 + round(raw * span)   raw in [0,1], span ~20
+                                              every 0.05 of raw is one tick
+
+At init the policy would sit near 5-8 ticks with gradient in both directions,
+instead of pinned at 1 with gradient nowhere.
+
+**Cost:** a third action-space change; every checkpoint is invalidated again.
+The F baseline is untouched as always.
+
+**Why before SAC.** SAC's value is as a control — is the refusal a property of
+PPO or of the market? That only means something if the action space can express
+the behaviour being asked about. A max-entropy learner would sit in the same
+flat region and produce the same null, and we would have spent the compute to
+learn nothing.
+
+**The argument against doing it at all:** this is the third instance of one bug
+class, and at some point "we kept finding our own bugs" *is* the finding.
+There is already a complete honest arc for the talk. If the fix lands and P1 is
+still null, that is a real result about the agent rather than the rig — and the
+natural place to stop experimenting and start building the deck.
 
 ## Superseded — the old blocker on re-running the grid
 
@@ -154,6 +209,8 @@ unblocked.
 
 ## Decisions waiting on Pavel
 
+0. **Whether to do the offset rescale at all** (see above), or stop the
+   fix-and-retest loop here and build the deck. Genuinely open.
 1. The spine sentence. North star as stated 2026-09-04: set up an environment,
    tried a lot of things, hopefully got interesting behaviour; and teach the
    room PPO plus probably a second algorithm. The teaching goal is agreed as
