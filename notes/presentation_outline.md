@@ -206,12 +206,35 @@ withdrawn. What survives is the magnitude: every seed's correlation falls from
 This is the third time seed count has overturned an exciting single number
 here. It belongs in the methods footnote with the others.
 
-**[pending] Withdrawal rate vs informed flow.** `withdrawn%` is now a decision
-the policy makes (22.7% / 32.5% in the gated cells), so the phase diagram is
-answerable at last. Note the honest hypothesis has changed: given that a
-properly quoting agent loses at the default 2.4% informed flow, the question
-is no longer "where is the viability boundary" but "is there a viable region
-at all". Either answer is a result.
+**[solid, 2026-09-05] The spine result — grid2.** 240 runs, 20 seeds, zero
+failures, predictions pre-registered before the first job
+(`notes/grid2_results.md`). The competition axis was verified live this time:
+`quote ident%` 41-60% at every multi-agent cell, against the 97-99.9% that
+voided the last grid.
+
+- **No viable region.** All twelve cells of informed-flow x competition lose.
+  Every 95% CI excludes zero. The best case in the whole design — least
+  informed flow, no competition — is **−$2,649 per agent**.
+- **The mechanism is identical everywhere.** Spread capture is ~$22 at every
+  cell while adverse selection ranges over a factor of two, so **capture is
+  0.8-1.4% of |P&L| throughout**. The agent earns the same trivial spread no
+  matter what the market looks like; the outcome is set entirely by how badly
+  it gets picked off.
+- **The punchline for act 4's callback.** Fixing the action space tripled
+  capture *and* tripled adverse selection, leaving the ratio unchanged. We
+  turned it into a real market maker and it got run over at three times the
+  scale.
+- **Competition does nothing** — and this is a genuine null, not a null by
+  construction, which is the difference the acceptance check buys.
+
+**[pending] The honest gap, and it belongs on the "what this does not mean"
+slide.** The agent never widens its spread: it is pinned at the 2c floor at
+every cell, and its raw offsets are 0.18-0.29c, so it is still trying to quote
+sub-tick. Two readings fit — informed flow genuinely does not drive withdrawal,
+or **the agent cannot perceive informed flow at all**. The observation has no
+order-flow imbalance, no trade history, no signed flow. An agent blind to
+adverse selection would look exactly like this. The no-viable-region result does
+not depend on which reading is right; the withdrawal question does, entirely.
 
 > CLAIM SLOT — what this act concludes depends on whether the re-run produces
 > a withdrawal curve. Do not write it until the result exists.

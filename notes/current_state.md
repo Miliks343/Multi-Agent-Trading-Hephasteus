@@ -3,14 +3,14 @@
 **Keep this file current.** It is the thing a fresh session should read first.
 Everything else in `notes/` is a record of a moment; this is the running state.
 
-Last updated: 2026-09-04 (grid2 running overnight).
+Last updated: 2026-09-05 (grid2 complete).
 
 ## The one-line summary
 
-The agent now makes markets, and still loses money. The action space was
-rebuilt so withdrawal is a decision rather than a rounding artifact, and the
-agents were given an identity bit so they stop being the same bot; both are
-verified at 10 seeds. Acts 4 and 7 still need new claims.
+The agent now makes markets, the agents are verifiably distinct, and it still
+loses money at **every** combination of informed flow and competition tested —
+earning ~1% of its P&L from the spread. That is the project's central result
+and it is about the environment, not about PPO. Acts 4 and 7 still need claims.
 
 ## What is settled and quotable
 
@@ -68,37 +68,41 @@ hand-coded F baseline is untouched and its numbers stand.
 cells) rather than a rounding artifact. Whether it rises with informed flow is
 the grid, and is now answerable.
 
-## Running now — grid2, the spine
+## grid2 — complete 2026-09-05. The spine result.
 
-Launched 2026-09-04 ~23:07 on the desktop, `setsid nohup experiments/run.sh
-grid2 -j 6 > /tmp/grid2.log`. **240 runs** (12 cells x 20 seeds), ~6 hours.
-Survives a Claude Code restart; it does not need a session attached.
+240 runs, 8h36m, zero failures. Predictions were committed before the first job
+(`notes/grid2_preregistration.md`); full writeup in `notes/grid2_results.md`.
 
-Predictions were **pre-registered before the first job** in
-`notes/grid2_preregistration.md`. Do not edit that file now.
+**The acceptance check passed for the first time.** `quote ident%` is 41-60% at
+every n>=2 cell against the 97-99.9% that voided the 2026-09 grid, so the
+competition axis finally varied competitors rather than copies of one policy.
+That is what makes this null mean something different from the last one.
 
-The decisive cell is **v10_n1** — least informed flow, no competition. A
-properly quoting agent already loses $1,373/agent at v50, and v10 is the only
-cell with less informed flow than that. If v10_n1 is not profitable there is no
-viable region anywhere in this parameterisation, which is a statement about the
-environment rather than about PPO.
+- **P3 supported, decisively. No viable region.** All twelve cells lose, every
+  95% CI excludes zero. `v10_n1` — least informed flow, no competition, the best
+  case in the design — is **−$2,649/agent**. Capture is ~$22 at *every* cell
+  while adverse selection ranges over 2x, so capture is **0.8-1.4% of |P&L|
+  throughout**.
+- **Fixing the action space tripled capture AND tripled adverse selection**
+  (7.3 -> 22.8, −827 -> −2221 pooled at n=1) and left the ratio unchanged. It is
+  a real market maker now, run over at three times the scale.
+- **P4 supported, and a genuine null this time** — competition has no measurable
+  effect on anything.
+- **P1 and P2 unsupported**, but P2's DV is degenerate: quoted spread is
+  1.985-2.032c at all twelve cells because the policy is pinned to the 2c floor,
+  and its raw offsets are 0.18-0.29c. It is still trying to quote sub-tick; the
+  floor does all the work.
 
-**To pick it up:**
+**The caveat that matters most.** P1's failure may be measurement, not finding.
+The observation has **no order-flow imbalance, no trade history, no signed
+flow** — an agent blind to adverse selection would look exactly like this. So
+"the agent does not widen against informed flow" is currently a claim about the
+observation, not about market making. P3 does not depend on it.
 
-    ssh pavel@100.92.153.77
-    grep -E 'suite grid2 finished|NOTE:|FAIL' /tmp/grid2.log   # done?
-    cd ~/marl-lob
-    .work/venv/bin/python scripts/quote_stats.py grid2         # primary DV
-    .work/venv/bin/python scripts/agent_divergence.py runs/grid2/v50_n2/seed0/eval
-
-Analysis plan is in the pre-registration: contrasts **paired by training seed**
-with a sign test alongside t, n/sd/interval on every number, and
-`agent_divergence` as an acceptance check — any n>=2 cell whose `quote ident%`
-is not well below 99% did not receive its competition treatment and its
-competition result is void whatever it says.
-
-Seeds are contiguous from 0 and jobs are seed-major, so this extends to 20-49
-later by adding files rather than re-running (`MARL_GRID2_SEEDS=20-49`).
+**Methodological trap recorded:** sign tests came out significant (p=0.041,
+0.012) on spread effects of −0.026c and −0.002c *in the wrong direction*,
+because the metric is pinned against a floor. Report effect sizes beside
+p-values.
 
 ## Superseded — the old blocker on re-running the grid
 
