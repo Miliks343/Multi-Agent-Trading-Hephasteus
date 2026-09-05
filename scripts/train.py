@@ -75,6 +75,7 @@ def make_env(
     agent_id_obs: bool = True,
     agent_id_width: int | None = None,
     include_ofi: bool = False,
+    latency_edge: float | None = None,
     config_kwargs: dict | None = None,
 ):
     env = MarlLobEnv(
@@ -89,6 +90,7 @@ def make_env(
         agent_id_obs=agent_id_obs,
         agent_id_width=agent_id_width,
         include_ofi=include_ofi,
+        latency_edge=latency_edge,
         config_kwargs=config_kwargs,
     )
     env = ss.pettingzoo_env_to_vec_env_v1(env)
@@ -184,6 +186,15 @@ def main():
                              "about flow. grid2's P1 (no widening against "
                              "informed flow) may be a fact about this gap "
                              "rather than about market making.")
+    parser.add_argument("--latency-edge", type=float, default=None,
+                        help="pin our agents' latency to the exchange at this "
+                             "multiple of the background median. 1.0 = a "
+                             "typical participant, 0.1 = ten times faster, "
+                             "0.0 = co-located, >1 = a disadvantage. Left "
+                             "unset, ABIDES drops us at a RANDOM point on its "
+                             "Seattle-to-NYC line, so latency has been an "
+                             "uncontrolled variable in every run so far - "
+                             "setting this to 1.0 is a control, not a no-op.")
     parser.add_argument("--norm-obs", action="store_true",
                         help="normalise observations in VecNormalize. OFF by "
                              "default to match the May runs, but observations "
@@ -218,6 +229,7 @@ def main():
         agent_id_obs=not args.no_agent_id_obs,
         agent_id_width=args.agent_id_width,
         include_ofi=args.ofi,
+        latency_edge=args.latency_edge,
         n_agents=args.n_agents,
         inventory_penalty=args.inventory_penalty,
         vecnormalize=not args.no_vecnormalize,

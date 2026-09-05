@@ -27,6 +27,7 @@ from abides_markets.utils import config_add_agents
 from .configs import rmsc03_simple
 from .marl_agents import MarlChild, MarlCoordinator
 from .actions import DEFAULT_MIN_OFFSET_TICKS, DEFAULT_MIN_QUOTE_SIZE
+from .latency import apply_latency_edge, describe_edge
 from .observation_extractor import (
     DEFAULT_K,
     DEFAULT_OFI_ALPHA,
@@ -91,6 +92,7 @@ class MarlLobEnv(ParallelEnv):
         agent_id_width: Optional[int] = None,
         include_ofi: bool = False,
         ofi_alpha: float = DEFAULT_OFI_ALPHA,
+        latency_edge: Optional[float] = None,
         config_kwargs: Optional[dict[str, Any]] = None,
     ) -> None:
         self.n_agents = n_agents
@@ -112,6 +114,11 @@ class MarlLobEnv(ParallelEnv):
         )
         self.include_ofi = include_ofi
         self.ofi_alpha = ofi_alpha
+        # None leaves ABIDES' random placement alone (the historical
+        # behaviour); a float pins our latency to the exchange at that
+        # multiple of the background median. 0.0 is co-located.
+        self.latency_edge = latency_edge
+        self._latency_summary: Optional[dict] = None
         self.symbol = symbol
         self.historical_date = historical_date
         self.start_time = start_time
@@ -242,6 +249,20 @@ class MarlLobEnv(ParallelEnv):
         config = config_add_agents(
             bg_config, list(self._children) + [self._coord]
         )
+
+        # config_add_agents regenerates the latency model for the enlarged
+        # agent count, which drops our agents at a uniformly random point on
+        # ABIDES' Seattle-to-NYC line. That makes our latency to the exchange
+        # an *uncontrolled* variable, redrawn every seed. Pinning it is an
+        # improvement in experimental control even at factor 1.0, which places
+        # us at the population median rather than wherever the draw landed.
+        if self.latency_edge is not None:
+            lat = config.get("agent_latency_model")
+            our_ids = tuple(c.id for c in self._children) + (self._coord.id,)
+            lat.min_latency = apply_latency_edge(
+                lat.min_latency, our_ids=our_ids, factor=self.latency_edge
+            )
+            self._latency_summary = describe_edge(lat.min_latency, our_ids)
 
         self.kernel = Kernel(
             random_state=np.random.RandomState(seed=int(seed) % (2**32 - 1)),
